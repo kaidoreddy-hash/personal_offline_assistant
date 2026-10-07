@@ -43,15 +43,11 @@ class STT:
 
     def transcribe(self, pcm16: bytes) -> str:
         if self._model is None:
-            return ""  # mock: text arrives via WS events until STT cached
-        import numpy as np, tempfile, wave  # type: ignore
+            return ""  # only when models/stt-tiny not cached yet
+        import numpy as np  # type: ignore
 
+        # ponytail: float array direct — skips PyAV decode (av version breaks
+        # faster-whisper 1.2.1 file path) and one temp file.
         a = np.frombuffer(pcm16, dtype=np.int16).astype("float32") / 32768.0
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            with wave.open(f.name, "wb") as w:
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(16000)
-                w.writeframes((a * 32767).astype("<i2").tobytes())
-            segs, _ = self._model.transcribe(f.name)
-            return " ".join(s.text for s in segs).strip()
+        segs, _ = self._model.transcribe(a, language=None)
+        return " ".join(s.text for s in segs).strip()
