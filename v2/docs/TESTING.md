@@ -35,9 +35,30 @@ completes complete, noise/silence produce nothing.
 
 ## Debugging a bad mic session
 
-Every session writes logs/session_<ts>/events.jsonl (+ utterance wavs). Grep the jsonl for
-`wake`, `turn_check`, `final`, `barge_in`, `error`. If VAD never fires, run tools/mic_probe
-style checks: check your OS default input device first; the browser uses its own input picker.
+Every session auto-writes logs/session_<ts>/events.jsonl (+ utterance wavs): wake scores,
+state phases, turn probabilities, partials/finals, barge-ins, echo drops, latencies. One file
+per session — grep it, don't guess. Key events: `echo_tail_dropped` / `wake_tail_dropped`
+(suppressed ghosts), `turn_hold` / `turn_force` (end-of-turn decisions), `barge_in`.
+
+## Echo and barge-in (read this before testing)
+
+Open speakers + mic in the same room = the agent hears itself. Three layers handle it:
+1. Client echo gate (default ON): mic frames are NOT sent while TTS plays + 300ms tail.
+2. Server drops any utterance that started inside the playback tail window (`echo_tail_dropped`).
+3. Barge-in arms only after the mic is quiet — a reply's echo tail can't kill a fresh reply.
+
+Trade-off: with the gate ON, you cannot interrupt by voice on open speakers (mic is closed while
+it talks; the reply finishes, then ~0.3s later you talk). For TRUE voice barge-in, use a headset
+or real Chrome/Edge with working AEC: set `suppressMic = false` in server/ui/app.js — the
+server-side barge-in path is fully armed. On the Pi, the ReSpeaker's DSP/software echo guard
+takes this role (see pi5_deploy.md).
+
+## Groq dev bridge (temporary, for E2E testing)
+
+`configs/desktop.yaml` has `brain.type: groq`. Copy `.env.example` to `.env`, set `GROQ_API_KEY`,
+restart the server — replies, memory answers and summaries then come from Groq with your local
+RAG context injected. Without a key it logs a warning and uses the offline stub. The Pi config
+stays `stub` (sovereign); `llm` (local llama.cpp) replaces both later.
 
 ## Benchmarks
 

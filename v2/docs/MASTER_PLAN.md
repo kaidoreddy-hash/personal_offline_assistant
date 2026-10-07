@@ -72,7 +72,10 @@ clones, kept intact).
 - [x] P7 store + hybrid RAG
 - [x] P8 tools (weather / search / telegram / memory) behind the router seam
 - [x] P9 meeting mode + diarization + stub summary
-- [ ] P10 (NOW) load to Pi: see docs/pi5_deploy.md; hardware per docs/wiring.md
+- [x] P10 load to Pi: see docs/pi5_deploy.md; hardware per docs/wiring.md
+- [x] P10.5 echo/barge hardening from live logs: client mic gate during playback, echo-tail
+  discard, barge armed-after-quiet; GroqBrain dev bridge (.env GROQ_API_KEY) for E2E testing
+  with real reasoning + RAG + tool phrasing (desktop config only; Pi stays sovereign)
 - [ ] P11 brain swap: StubBrain → LlmBrain (llama.cpp OpenAI-compatible on localhost)
   - LFM2.5-1.2B-Instruct: LFM Open License v1.0 — free below $10M revenue (hackathon fine), 32K ctx
     (not 2K), llama.cpp supported. https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct
