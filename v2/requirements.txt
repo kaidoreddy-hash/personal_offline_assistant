@@ -1,6 +1,0 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-pyyaml>=6.0
-numpy>=1.26
-httpx>=0.27
-sounddevice>=0.5  # mic_probe + local audio; needs portaudio system lib on Pi
