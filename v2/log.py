@@ -112,5 +112,8 @@ class SessionLog:
     def barge_in(self, aid: Optional[str], voice_ms: float):
         self._write("barge_in", aid, voice_ms=round(float(voice_ms), 1))
 
+    def wake_word(self, phrase: str, threshold: float):
+        self._write("wake_word", phrase=phrase, threshold=threshold)
+
     def crash(self, where: str, error: str):
         self._write("loop_crash", where=where, error=error)

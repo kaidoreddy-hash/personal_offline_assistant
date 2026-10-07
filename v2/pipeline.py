@@ -18,6 +18,7 @@ from v2.stt import transcribe
 from v2.tts import synthesize
 from v2.turn import TurnSegmenter, frame_dbfs
 from v2.vad_eou import SileroVAD
+from v2.wakeword import WakeWord
 
 BARGE_IN_DBFS = -35.0
 BARGE_IN_VOICE_MS = 120.0
@@ -33,6 +34,7 @@ class Pipeline:
         self.audio = AudioIO()
         self.engine = Engine(on_state=self._on_state)
         self.echo = EchoGate()
+        self.wakeword = WakeWord()  # lazy: loads ONNX on first DORMANT chunk
         self._state_cb: Optional[Callable[[str], None]] = None
         self._partial_cb: Optional[Callable[[str, str, float], None]] = None
         self._stop = threading.Event()
@@ -219,8 +221,23 @@ class Pipeline:
                 self._maybe_done(now)
                 continue
 
+            if self.engine.state == DORMANT:
+                # Wake-word only. VAD/STT/SmartTurn stay off; ~0.6ms/chunk.
+                # A miss must never kill the loop, so errors are swallowed
+                # here and surface as silence (no wake).
+                try:
+                    if self.wakeword.available and self.wakeword.feed(chunk):
+                        self.start_session()
+                        if self.session:
+                            self.session.wake_word(
+                                self.wakeword.phrase, self.wakeword.threshold
+                            )
+                except Exception:
+                    pass
+                continue
+
             if self.engine.state != LISTENING:
-                # DORMANT/THINKING: mic open, no turn detect.
+                # SPEAKING handled above; THINKING is transient: skip.
                 continue
 
             out = self.seg.feed(chunk, chunk_ms=32.0)

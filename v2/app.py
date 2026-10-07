@@ -34,7 +34,7 @@ HTML = r"""<!doctype html><html><head><meta charset="utf-8"><title>v2 s2s</title
  button.secondary{background:#334155;color:#e2e8f0}
 </style></head><body><div class="card">
 <h1>v2 · sovereign companion</h1>
-<div class="sub">open-mic handsfree · Silero VAD → SmartTurn EOU → Whistle STT → Piper TTS</div>
+<div class="sub">open-mic handsfree · say “hey jarvis” or press Start · Silero VAD → SmartTurn → Whistle STT → Piper TTS</div>
 <div class="row"><div id="dot" class="dot dormant"></div><span id="state" class="pill">DORMANT</span><span id="lang" class="pill"></span></div>
 <div class="box" id="text">press Start, then speak…</div>
 <div class="meta" id="meta"></div>

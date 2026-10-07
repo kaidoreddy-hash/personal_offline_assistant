@@ -27,6 +27,10 @@ cactus-needle[mic]>=3.1.2    # Whistle STT: 16.9MB .cact, en+de+fr+es+it+nl+pl.
                              # wheels — no build step on the Pi.
 piper-tts>=1.2               # TTS. Voices download once into models/piper/, then
                              # fully offline. en_US-ryan-high, es_MX-claude-high.
+openwakeword>=0.6.0          # Wake word (DORMANT gate). Reuses onnxruntime.
+                             # pip pulls scikit-learn+scipy (training-only, never
+                             # imported at runtime). Models vendored once into
+                             # models/openwakeword/ — fully offline after that.
 
 # --- 4. Web testbed (server captures the mic; browser only displays) ---
 fastapi>=0.110

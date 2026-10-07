@@ -152,6 +152,28 @@ def test_silence_records_no_candidates():
     assert seg.last_candidates == []
 
 
+def test_wakeword_offline_silence_no_fire():
+    from v2.wakeword import WakeWord
+
+    w = WakeWord()
+    assert w.available is True
+    sil = (np.zeros(16000 * 2, dtype=np.int16)).tobytes()
+    assert not any(w.feed(sil[i : i + 1024]) for i in range(0, len(sil), 1024))
+
+
+def test_wakeword_refractory_and_missing_model():
+    import pytest
+
+    from v2.wakeword import WakeWord
+
+    w = WakeWord(threshold=0.0, refractory_s=60.0)  # fires on anything
+    frame = (np.zeros(1280, dtype=np.int16)).tobytes()
+    assert w.feed(frame) is True
+    assert w.feed(frame) is False  # cooldown suppresses repeats
+    with pytest.raises(FileNotFoundError):
+        WakeWord(phrase="no_such_model_xyz").feed(frame)
+
+
 def test_pipeline_turn_start_logs_attempt_id():
     """The exact loop path: VAD edge -> attempt file carries the attempt id.
     Guards the turn_start(aid, db, prob) signature against drift."""
