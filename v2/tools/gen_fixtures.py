@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 FIXTURES = ROOT / "tests" / "fixtures"
 
 SPEECH = {
+    "wake_jarvis.wav": "Hey Jarvis.",
     "complete_1.wav": "What time is the meeting tomorrow.",
     "complete_2.wav": "Tell me a fun fact about space.",
     "incomplete_1.wav": "Can you remind me to",

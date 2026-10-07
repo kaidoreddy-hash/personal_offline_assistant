@@ -1,0 +1,153 @@
+'use strict';
+
+// tobi v2 web client — browser mic in, events + TTS audio out.
+// The browser's echo cancellation makes voice barge-in safe on this path.
+
+const els = {
+  state: document.getElementById('state'),
+  stateDot: document.getElementById('state-dot'),
+  wakeHint: document.getElementById('wake-hint'),
+  transcript: document.getElementById('transcript'),
+  reply: document.getElementById('reply'),
+  latency: document.getElementById('latency'),
+  logDir: document.getElementById('log-dir'),
+  meetingBtn: document.getElementById('meeting-btn'),
+  muteBtn: document.getElementById('mute-btn'),
+  meetingPanel: document.getElementById('meeting-panel'),
+  meetingList: document.getElementById('meeting-list'),
+  start: document.getElementById('start'),
+  startBtn: document.getElementById('start-btn'),
+};
+
+const STATE_COLORS = {
+  dormant: '#6b7280', listening: '#22c55e', thinking: '#f59e0b', speaking: '#3b82f6',
+};
+let meetingMode = false;
+
+let ws = null;
+let ctx = null, workletNode = null, mediaStream = null;
+let sources = [], nextStartTime = 0;
+
+function setState(s) {
+  els.state.textContent = meetingMode ? `meeting · ${s}` : s;
+  const color = meetingMode ? '#a855f7' : (STATE_COLORS[s] || '#6b7280');
+  els.stateDot.style.background = color;
+  els.wakeHint.style.display = s === 'dormant' ? 'block' : 'none';
+}
+
+function addLine(kind, text, cls) {
+  const div = document.createElement('div');
+  div.className = `line ${cls || ''}`;
+  div.textContent = text;
+  if (kind) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = kind;
+    div.prepend(tag);
+  }
+  els.transcript.appendChild(div);
+  els.transcript.scrollTop = els.transcript.scrollHeight;
+  return div;
+}
+
+let partialEl = null;
+function showPartial(text) {
+  if (!partialEl) partialEl = addLine('you', text, 'partial');
+  else partialEl.textContent = text;
+}
+function showFinal(text) {
+  if (partialEl) { partialEl.remove(); partialEl = null; }
+  addLine('you', text, 'final');
+}
+
+function stopPlayback() {
+  sources.forEach((s) => { try { s.stop(); } catch (e) {} });
+  sources = [];
+  nextStartTime = 0;
+}
+
+function queueAudio(pcm16) {
+  const n = pcm16.byteLength / 2;
+  const f32 = new Float32Array(n);
+  const i16 = new Int16Array(pcm16);
+  for (let i = 0; i < n; i++) f32[i] = i16[i] / 32768;
+  const buf = ctx.createBuffer(1, n, 16000);
+  buf.copyToChannel(f32, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  const at = Math.max(ctx.currentTime + 0.02, nextStartTime);
+  src.start(at);
+  nextStartTime = at + buf.duration;
+  sources.push(src);
+  src.onended = () => { sources = sources.filter((s) => s !== src); };
+}
+
+async function start() {
+  els.startBtn.disabled = true;
+  els.startBtn.textContent = 'loading models…';
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  ctx = new AudioContext({ sampleRate: 16000 });
+  await ctx.audioWorklet.addModule('/mic-worklet.js');
+  workletNode = new AudioWorkletNode(ctx, 'mic-capture');
+  workletNode.port.onmessage = (e) => { if (ws && ws.readyState === 1) ws.send(e.data); };
+  ctx.createMediaStreamSource(mediaStream).connect(workletNode); // not to destination: no feedback loop
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (e) => {
+    if (e.data instanceof ArrayBuffer) return queueAudio(e.data);
+    const m = JSON.parse(e.data);
+    switch (m.type) {
+      case 'hello':
+        els.logDir.textContent = `logs: ${m.log_dir.split(/[\\/]/).slice(-1)[0]}`;
+        if (m.wake_words) els.wakeHint.textContent = `say "hey ${m.wake_words[0].replaceAll('_', ' ')}"`;
+        break;
+      case 'state': setState(m.state); break;
+      case 'wake': addLine('sys', 'wake word detected', 'sys'); break;
+      case 'partial': showPartial(m.text); break;
+      case 'final': showFinal(m.text); break;
+      case 'bargein': stopPlayback(); els.reply.textContent = ''; break;
+      case 'error': addLine('sys', `error: ${m.message}`, 'sys'); break;
+      case 'latency': els.latency.textContent = `${m.eot_to_first_audio_ms} ms to voice`; break;
+      case 'meeting_segment': {
+        const t = new Date(m.t_ms).toISOString().substring(14, 19);
+        const div = document.createElement('div');
+        div.className = 'mseg';
+        div.textContent = `+${Math.floor(m.t_ms / 60000)}:${String(Math.floor(m.t_ms / 1000) % 60).padStart(2, '0')}  ${m.text}`;
+        els.meetingList.appendChild(div);
+        els.meetingList.scrollTop = els.meetingList.scrollHeight;
+        break;
+      }
+      case 'muted': els.muteBtn.textContent = m.muted ? 'unmute' : 'mute'; break;
+    }
+  };
+  ws.onclose = () => setState('disconnected');
+
+  els.start.style.display = 'none';
+}
+
+els.startBtn.addEventListener('click', start);
+
+els.muteBtn.addEventListener('click', () => {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'mute', value: els.muteBtn.textContent === 'mute' }));
+});
+
+els.meetingBtn.addEventListener('click', () => {
+  if (!ws || ws.readyState !== 1) return;
+  const on = els.meetingBtn.textContent !== 'end meeting';
+  ws.send(JSON.stringify({ type: 'meeting', value: on }));
+  els.meetingBtn.textContent = on ? 'end meeting' : 'meeting mode';
+  meetingMode = on;
+  els.meetingPanel.style.display = on ? 'block' : 'none';
+  els.reply.style.display = on ? 'none' : 'block';
+  if (on) { stopPlayback(); els.meetingList.innerHTML = ''; setState('listening'); }
+});
+
+// Keep the state pill in sync during playback silence.
+setInterval(() => {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+}, 25000);
