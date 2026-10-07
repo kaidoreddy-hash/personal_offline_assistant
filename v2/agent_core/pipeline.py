@@ -103,6 +103,9 @@ class VoicePipeline:
         self._last_voice = time.monotonic()
         self._wake_ok_at = 0.0          # wake refractory deadline
         self._wake_grace_until = 0.0    # drop wake-phrase tails right after a wake
+        self._wake_probe_max = 0.0      # near-miss wake score logging (debugging aid)
+        self._wake_probe_at = 0.0
+        self._last_turn_ms: float | None = None
         self.emit({"type": "state", "state": self.state, "meeting": meeting_mode})
 
     # ------------------------------------------------------------------ feed
@@ -122,6 +125,17 @@ class VoicePipeline:
                 self._set_state(LISTENING)
                 self._last_voice = time.monotonic()
                 self._speak_text(self.cfg.greeting)
+            elif scores:
+                # Near-miss visibility: below-threshold scores must be debuggable.
+                now = time.monotonic()
+                m = max(scores.values())
+                if m > self._wake_probe_max:
+                    self._wake_probe_max = m
+                if now - self._wake_probe_at > 2.0 and self._wake_probe_max > 0.2:
+                    self.log.log("wake_probe", score=round(self._wake_probe_max, 3),
+                                 threshold=self.cfg.wake.threshold)
+                    self._wake_probe_at = now
+                    self._wake_probe_max = 0.0
             return
 
         utterance = self.tracker.process(frame)
@@ -174,7 +188,9 @@ class VoicePipeline:
     async def _process_turn(self, utterance: np.ndarray) -> None:
         try:
             result = await self._loop.run_in_executor(None, self.turn.predict, utterance)
-            self.log.log("turn_check", probability=round(result.probability, 3), complete=result.complete)
+            self._last_turn_ms = result.inference_ms
+            self.log.log("turn_check", probability=round(result.probability, 3), complete=result.complete,
+                         inference_ms=round(result.inference_ms))
             if not result.complete:
                 # Hold the turn. If the user resumes, audio merges; if not, force after the delay.
                 self._pending.append(utterance)
@@ -222,8 +238,17 @@ class VoicePipeline:
             return
 
         self.history.append(Turn("user", transcript.text))
+        t_llm0 = time.perf_counter()
+        first_text_ms: list[float | None] = [None]
+
+        async def timed_words():
+            async for word in self.brain.respond(transcript.text, list(self.history)):
+                if first_text_ms[0] is None:
+                    first_text_ms[0] = (time.perf_counter() - t_llm0) * 1000
+                yield word
+
         first_audio_ms, reply_text = await self._play_sentences(
-            self._sentences(self.brain.respond(transcript.text, list(self.history))), t_eot
+            self._sentences(timed_words()), t_eot
         )
         if self.store is not None and transcript.text:
             self.store.add_utterance(self._session_id, round((time.monotonic() - self._t0) * 1000),
@@ -234,7 +259,10 @@ class VoicePipeline:
                 self.store.add_utterance(self._session_id, round((time.monotonic() - self._t0) * 1000),
                                          "assistant", reply_text)
         if first_audio_ms is not None:
-            self.emit({"type": "latency", "eot_to_first_audio_ms": round(first_audio_ms)})
+            self.emit({"type": "latency", "eot_to_first_audio_ms": round(first_audio_ms),
+                       "stt_ms": round(transcript.inference_ms),
+                       "llm_ttft_ms": round(first_text_ms[0]) if first_text_ms[0] is not None else None,
+                       "turn_ms": round(self._last_turn_ms) if self._last_turn_ms is not None else None})
         self._set_state(LISTENING)
 
     async def _meeting_segment(self, utterance: np.ndarray) -> None:
@@ -274,6 +302,7 @@ class VoicePipeline:
                 if not sentence.strip():
                     continue
                 reply_text += sentence
+                self.emit({"type": "reply_chunk", "text": sentence})  # live streaming text
                 audio = await self._loop.run_in_executor(None, self.tts.synth_all, sentence)
                 if self._barge.is_set():
                     break

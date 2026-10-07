@@ -9,7 +9,7 @@ turn:
 wake:
   dir: models/wakeword
   names: [hey_jarvis]
-  threshold: 0.5
+  threshold: 0.45            # noisier demo hall: stricter than desktop to avoid false wakes
   refractory_ms: 2000
 stt:
   model_dir: models/stt-tiny

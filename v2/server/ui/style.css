@@ -32,6 +32,7 @@ section h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
 .line.partial { color: var(--dim); font-style: italic; }
 .line.final { color: var(--text); }
 .line.sys { color: #f59e0b; font-size: 13px; }
+.reply-line { padding: 4px 0; color: #7dd3fc; word-break: break-word; }
 
 .mseg { padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
 .mseg b { color: #a855f7; }

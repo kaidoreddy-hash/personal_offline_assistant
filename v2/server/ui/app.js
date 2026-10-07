@@ -76,6 +76,18 @@ function showPartial(text) {
 function showFinal(text) {
   if (partialEl) { partialEl.remove(); partialEl = null; }
   addLine('you', text, 'final');
+  els.reply.textContent = '';   // a new answer starts streaming below
+  replyEl = null;
+}
+
+let replyEl = null;
+function showReplyChunk(text) {
+  if (!replyEl || !replyEl.isConnected) {
+    replyEl = document.createElement('div');
+    replyEl.className = 'reply-line';
+    els.reply.appendChild(replyEl);
+  }
+  replyEl.textContent += text;
 }
 
 function stopPlayback() {
@@ -152,12 +164,20 @@ async function start() {
         if (m.wake_words) els.wakeHint.textContent = `say "hey ${m.wake_words[0].replaceAll('_', ' ')}"`;
         break;
       case 'state': setState(m.state); break;
-      case 'wake': addLine('sys', 'wake word detected', 'sys'); break;
+      case 'wake': addLine('sys', 'wake word detected', 'sys'); els.reply.textContent = ''; replyEl = null; break;
       case 'partial': showPartial(m.text); break;
       case 'final': showFinal(m.text); break;
-      case 'bargein': stopPlayback(); els.reply.textContent = ''; break;
+      case 'reply_chunk': showReplyChunk(m.text); break;
+      case 'bargein': stopPlayback(); els.reply.textContent = ''; replyEl = null; break;
       case 'error': addLine('sys', `error: ${m.message}`, 'sys'); break;
-      case 'latency': els.latency.textContent = `${m.eot_to_first_audio_ms} ms to voice`; break;
+      case 'latency': {
+        const parts = [`${(m.eot_to_first_audio_ms / 1000).toFixed(2)}s voice`];
+        if (m.llm_ttft_ms != null) parts.push(`llm ${(m.llm_ttft_ms / 1000).toFixed(2)}s`);
+        if (m.stt_ms != null) parts.push(`stt ${(m.stt_ms / 1000).toFixed(2)}s`);
+        if (m.turn_ms != null) parts.push(`turn ${m.turn_ms}ms`);
+        els.latency.textContent = parts.join(' · ');
+        break;
+      }
       case 'meeting_segment': {
         const div = document.createElement('div');
         div.className = 'mseg';
