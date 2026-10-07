@@ -1,0 +1,2 @@
+# Test-only deps. Pi runtime excludes these; CI/dev includes via requirements-pi.txt.
+pytest>=8.0
