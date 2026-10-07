@@ -21,7 +21,7 @@ tts:
   gain: 1.0
 brain:
   type: groq                   # dev bridge for E2E testing; falls back to stub without a key
-  model: llama-3.3-70b-versatile
+  model: openai/gpt-oss-20b    # fastest TTFT on Groq as of Oct 2026; tools + 32k ctx
   api_key_env: GROQ_API_KEY
 greeting: "I'm listening."
 dormancy: { timeout_s: 90 }

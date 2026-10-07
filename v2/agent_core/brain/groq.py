@@ -88,6 +88,8 @@ class GroqBrain(Brain):
             "temperature": 0.5,
             "max_tokens": 300,
         }
+        if self.model.startswith("openai/gpt-oss"):
+            payload["reasoning_effort"] = "low"  # voice loop: TTFT beats deliberation
         headers = {"Authorization": f"Bearer {key}"}
         try:
             async with httpx.AsyncClient(timeout=30) as client:
