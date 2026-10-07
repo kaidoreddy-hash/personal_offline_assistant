@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tobi v2 — hey tobi to wake</title>
+<style>body{font-family:system-ui;margin:0;background:#0b0f14;color:#e8eef4}main{max-width:720px;margin:24px auto;padding:0 16px}
+#dot{width:12px;height:12px;border-radius:50%;background:#555;display:inline-block;margin-right:8px}
+.live{color:#7CFFB2}.reply{white-space:pre-wrap;background:#131b24;padding:12px;border-radius:10px;min-height:80px}
+#partial{opacity:.75;min-height:1.5em}.row{display:flex;gap:8px;margin:12px 0}button{padding:10px 14px;border-radius:8px;border:0;background:#1f6feb;color:#fff;cursor:pointer}
+input{flex:1;padding:10px;border-radius:8px;border:1px solid #333;background:#111;color:#eee}</style></head>
+<body><main>
+<h3><span id="dot"></span><span id="state">dormant — say “hey tobi”</span></h3>
+<div class="row"><button id="mic">Enable mic</button><button id="wake">Simulate “hey tobi”</button></div>
+<div id="partial" class="live"></div>
+<div id="reply" class="reply"></div>
+<div class="row"><input id="txt" placeholder="or type here (tests same pipeline)"><button id="send">Send</button></div>
+<p style="opacity:.6;font-size:13px">Handsfree: mic stays open after enable. Speak over a reply to barge in. No timers, no interrupt button by design.</p>
+<script>
+const $=id=>document.getElementById(id), ws=new WebSocket(`ws://${location.host}/ws`);
+let speaking=false, logFile="";
+ws.onmessage=e=>{const m=JSON.parse(e.data);
+ if(m.event==="state"){$("state").textContent=m.state==="dormant"?"dormant — say “hey tobi”":m.state;
+  $("dot").style.background=m.state==="listening"?"#2ecc71":m.state==="responding"?"#f1c40f":"#555";if(m.state!=="responding")speaking=false;}
+ if(m.event==="live_transcript")$("partial").textContent="🗣 "+m.text;
+ if(m.event==="llm_chunk")$("reply").textContent+=m.text;
+ if(m.event==="tts"){speak(m.text);$("partial").textContent="";}
+ if(m.event==="log")logFile=m.file;};
+function speak(t){try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);speaking=true;
+ u.onend=()=>speaking=false;u.onerror=()=>speaking=false;speechSynthesis.speak(u);}catch(e){}}
+$("wake").onclick=()=>{$("reply").textContent="";ws.send(JSON.stringify({event:"wakeword"}));};
+$("send").onclick=()=>{const t=$("txt").value.trim();if(!t)return;$("reply").textContent="";$("txt").value="";
+ ws.send(JSON.stringify({event:"final",text:t}));};
+// mic: energy VAD in-browser, sends partials + auto-final on end-of-speech, barge-in on speech during reply
+$("mic").onclick=async()=>{const s=await navigator.mediaDevices.getUserMedia({audio:true});
+ const C=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000}),src=C.createMediaStreamSource(s),
+ an=C.createAnalyser();an.fftSize=512;src.connect(an);const d=new Uint8Array(an.fftSize);
+ let heard="",sil=0,awake=false;const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
+ if(SR){rec=new SR();rec.continuous=true;rec.interimResults=true;
+  rec.onresult=e=>{const t=[...e.results].map(r=>r[0].transcript).join(" ");heard=t;
+   if(!awake&&t.toLowerCase().includes("hey tobi")){awake=true;$("reply").textContent="";ws.send(JSON.stringify({event:"wakeword"}));}
+   else if(awake){ws.send(JSON.stringify({event:"partial",text:t}));
+    if(speaking)ws.send(JSON.stringify({event:"barge_in"}));}};rec.start();}
+ setInterval(()=>{an.getByteTimeDomainData(d);let sum=0;for(const v of d)sum+=(v-128)**2;
+  const rms=Math.sqrt(sum/d.length)/128, speech=rms>0.03;
+  if(awake&&heard){if(!speech&&++sil>8){ws.send(JSON.stringify({event:"final",text:heard}));heard="";sil=0;}
+   else if(speech)sil=0;}},120);
+ $("mic").textContent="Mic live ✓";$("mic").disabled=true;};
+</script></main></body></html>

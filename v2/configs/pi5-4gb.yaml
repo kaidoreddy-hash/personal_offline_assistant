@@ -1,0 +1,24 @@
+# Pi 5 4GB profile. English-first. Telugu re-enable later.
+# No user-facing timers. Internal numbers below are ceilings, not UX.
+sample_rate: 16000
+wakeword: "hey tobi"
+dormant_after_silence_s: 30
+vad:
+  backend: auto  # silero-v5 | energy
+  threshold: 0.6
+turn:
+  backend: auto  # smart-turn-onnx | adaptive
+  min_speech_ms: 300
+stt:
+  backend: auto  # faster-whisper | vosk | mock
+  model: tiny.en
+  model_path: models/stt-tiny.en
+llm:
+  backend: stub  # stub | openai-compatible (friend's offline SLM)
+  base_url: http://127.0.0.1:8080/v1
+  model: local-slm
+tts:
+  backend: auto  # piper | mock (browser speechSynthesis on PC)
+  voice: models/en_US-lessac-medium.onnx
+logging:
+  dir: logs
