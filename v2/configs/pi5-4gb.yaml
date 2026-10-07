@@ -6,8 +6,11 @@ wakeword: "hey tobi"
 wakeword_onnx: models/hey_jarvis_v0.1.onnx  # stand-in until hey_tobi trained
 dormant_after_silence_s: 30
 vad:
+  # ponytail: calibrated by tools/mic_probe.py on YOUR mic. 0.2 = safe floor that
+  # catches quiet speech (silero peaks ~0.23 on Piper audio at unity gain).
+  # Raise toward 0.5-0.6 if the probe shows false triggers from room noise.
   backend: auto  # silero-v5 (onnxruntime, models/silero_vad_v5.onnx ~2MB) | energy
-  threshold: 0.6
+  threshold: 0.2
   onnx_path: models/silero_vad_v5.onnx
 turn:
   backend: auto  # smart-turn-onnx | adaptive (adaptive default on 4GB, saves RAM)

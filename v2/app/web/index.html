@@ -1,56 +1,85 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tobi v2 — offline, hey tobi to wake</title>
-<style>body{font-family:system-ui;margin:0;background:#0b0f14;color:#e8eef4}main{max-width:720px;margin:24px auto;padding:0 16px}
-#dot{width:12px;height:12px;border-radius:50%;background:#555;display:inline-block;margin-right:8px}
-.live{color:#7CFFB2}.reply{white-space:pre-wrap;background:#131b24;padding:12px;border-radius:10px;min-height:80px}
-#partial{opacity:.75;min-height:1.5em}.row{display:flex;gap:8px;margin:12px 0}button{padding:10px 14px;border-radius:8px;border:0;background:#1f6feb;color:#fff;cursor:pointer}
-input{flex:1;padding:10px;border-radius:8px;border:1px solid #333;background:#111;color:#eee}</style></head>
-<body><main>
-<h3><span id="dot"></span><span id="state">dormant — say “hey tobi”</span></h3>
-<div class="row"><button id="mic">Enable mic</button><button id="wake">Simulate “hey tobi”</button></div>
-<div id="partial" class="live"></div>
-<div id="reply" class="reply"></div>
-<div class="row"><input id="txt" placeholder="or type here (tests same pipeline)"><button id="send">Send</button></div>
-<p style="opacity:.6;font-size:13px">Fully offline: mic PCM is transcribed on this machine (faster-whisper), replies synthesised locally (Piper). No cloud speech APIs. Handsfree — speak over a reply to barge in.</p>
-<script>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tobi v2 — Sovereign S2S Companion</title>
+<style>
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:#0b0f14;color:#e8eef4}
+main{max-width:760px;margin:30px auto;padding:0 20px}
+.hdr{background:#131b24;padding:18px 24px;border-radius:12px;border:1px solid #1f2937;margin-bottom:20px}
+.row{display:flex;align-items:center;justify-content:space-between}
+#dot{width:14px;height:14px;border-radius:50%;background:#6b7280;display:inline-block;margin-right:10px}
+.meter{width:140px;height:10px;background:#1f2937;border-radius:5px;overflow:hidden}
+#meter-bar{width:0;height:100%;background:#10b981;transition:width .05s}
+.btns{display:flex;gap:12px;margin:16px 0}
+button{padding:12px 18px;border-radius:8px;border:0;background:#2563eb;color:#fff;cursor:pointer;font-size:14px;font-weight:600}
+button:disabled{background:#374151}
+.card{background:#16202c;border:1px solid #1f2937;border-radius:10px;padding:16px;margin:16px 0}
+.lbl{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;margin-bottom:8px}
+#partial{min-height:24px;color:#6ee7b7;font-size:17px;word-break:break-word}
+#reply{min-height:90px;color:#f3f4f6;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.ir{display:flex;gap:10px;margin-top:20px}
+input{flex:1;padding:12px 14px;border-radius:8px;border:1px solid #374151;background:#030712;color:#fff;font-size:14px}
+.note{font-size:13px;color:#6b7280;margin-top:18px;line-height:1.4}
+</style></head><body><main>
+<div class="hdr"><div class="row">
+  <div><span id="dot"></span><span id="state-text">Dormant — Say &ldquo;Hey Tobi&rdquo;</span></div>
+  <div class="meter"><div id="meter-bar"></div></div>
+</div></div>
+<div class="btns">
+  <button id="mic-btn" style="background:#059669">1. Enable Mic (Handsfree)</button>
+  <button id="wake-btn" style="background:#4b5563">Simulate &ldquo;Hey Tobi&rdquo;</button>
+</div>
+<div class="card"><div class="lbl">Live User Speech</div><div id="partial">Listening for speech...</div></div>
+<div class="card"><div class="lbl">Assistant Response</div><div id="reply"></div></div>
+<div class="ir"><input id="text-in" placeholder="Type a message to test the pipeline directly..."><button id="send-btn">Send</button></div>
+<p class="note"><strong>Fully offline:</strong> audio transcribed locally (Whistle/Whisper int8), spoken by Piper. Speak over the assistant to barge in.</p>
+</main><script>
 const $=id=>document.getElementById(id), ws=new WebSocket(`ws://${location.host}/ws`);
-let speaking=false, AC=null;
+let AC=null, src=null, playing=false;
 ws.onmessage=e=>{const m=JSON.parse(e.data);
- if(m.event==="state"){$("state").textContent=m.state==="dormant"?"dormant — say “hey tobi”":m.state;
-  $("dot").style.background=m.state==="listening"?"#2ecc71":m.state==="responding"?"#f1c40f":"#555";if(m.state!=="responding")speaking=false;}
- if(m.event==="live_transcript")$("partial").textContent="🗣 "+m.text;
+ if(m.event==="state"){const s=m.state;
+  $("state-text").textContent=s==="dormant"?"Dormant — Say \u201cHey Tobi\u201d":s==="listening"?"Listening...":"Responding (Speak to barge in)";
+  $("dot").style.background=s==="listening"?"#10b981":s==="responding"?"#f59e0b":"#6b7280";
+  if(s!=="responding"){stopAudio();} if(s==="responding")$("reply").textContent="";}
+ if(m.event==="live_transcript")$("partial").textContent="\uD83D\uDDE3 "+m.text;
  if(m.event==="llm_chunk")$("reply").textContent+=m.text;
- if(m.event==="tts_text"){playServerAudioPending=m.tts_audio||null;$("partial").textContent="";
-  // server sends tts_audio separately; fallback to local voice if Piper absent
-  if(!m.wav_b64)fallbackSpeak(m.text);}
+ if(m.event==="barge_in"){stopAudio();$("partial").textContent="\u26A1 Barged in!";}
  if(m.event==="tts_audio"&&m.wav_b64)playWav(m.wav_b64);
- if(m.event==="log")window._log=m.file;};
-let playServerAudioPending=null;
-function fallbackSpeak(t){try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);speaking=true;
- u.onend=()=>speaking=false;u.onerror=()=>speaking=false;speechSynthesis.speak(u);}catch(e){}}
-async function playWav(b64){try{AC=AC||new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
- const raw=Uint8Array.from(atob(b64),c=>c.charCodeAt(0)).buffer;
- const buf=await AC.decodeAudioData(raw.slice(0));const s=AC.createBufferSource();s.buffer=buf;s.connect(AC.destination);
- speaking=true;s.onended=()=>speaking=false;s.start();}catch(e){}}
-$("wake").onclick=()=>{$("reply").textContent="";ws.send(JSON.stringify({event:"wakeword"}));};
-$("send").onclick=()=>{const t=$("txt").value.trim();if(!t)return;$("reply").textContent="";$("txt").value="";
- ws.send(JSON.stringify({event:"final",text:t}));};
-// OFFLINE mic: raw 16k PCM frames -> server (local STT). No cloud browser STT anywhere.
-$("mic").onclick=async()=>{const s=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:16000,channelCount:1,echoCancellation:true}});
- const C=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000}),src=C.createMediaStreamSource(s),
- an=C.createAnalyser();an.fftSize=1024;src.connect(an);
- const proc=C.createScriptProcessor(4096,1,1);src.connect(proc);proc.connect(C.destination);
- const d=new Uint8Array(an.fftSize);let awake=false,sil=0,heard="";
- // wakeword text comes back from SERVER live_transcript (local STT); type fallback also arms it
- proc.onaudioprocess=ev=>{const ch=ev.inputBuffer.getChannelData(0),pcm=new Int16Array(ch.length);
-  for(let i=0;i<ch.length;i++)pcm[i]=Math.max(-32768,Math.min(32767,ch[i]*32768));
-  // local energy gate for barge-in signalling only (server VAD decides)
-  an.getByteTimeDomainData(d);let sum=0;for(const v of d)sum+=(v-128)**2;
-  const speech=Math.sqrt(sum/d.length)/128>0.03;
-  if(speech&&speaking)ws.send(JSON.stringify({event:"barge_in"}));
-  // stream PCM; server transcribes offline and returns live_transcript/final
-  let bin="";const b=new Uint8Array(pcm.buffer);for(let i=0;i<b.length;i+=512)bin+=String.fromCharCode.apply(null,b.subarray(i,i+512));
-  ws.send(JSON.stringify({event:"audio",pcm_b64:btoa(bin)}));};
- $("mic").textContent="Mic live ✓ (offline)";$("mic").disabled=true;};
-</script></main></body></html>
+ if(m.event==="tts_text"){if(!m.wav_b64)playBrowserTTS(m.text);}};
+function stopAudio(){if(src){try{src.stop();}catch(e){}src=null;}playing=false;
+ if(window.speechSynthesis)speechSynthesis.cancel();}
+function done(){playing=false;ws.send(JSON.stringify({event:"playback_done"}));}
+function playBrowserTTS(text){stopAudio();if(!window.speechSynthesis)return;
+ const u=new SpeechSynthesisUtterance(text);playing=true;u.onend=done;u.onerror=done;speechSynthesis.speak(u);}
+async function playWav(b64){stopAudio();
+ try{AC=AC||new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+  const bin=atob(b64),by=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)by[i]=bin.charCodeAt(i);
+  const buf=await AC.decodeAudioData(by.buffer.slice(0));
+  src=AC.createBufferSource();src.buffer=buf;src.connect(AC.destination);
+  playing=true;src.onended=()=>{src=null;done();};src.start();}
+ catch(e){done();}}
+$("wake-btn").onclick=()=>{stopAudio();$("reply").textContent="";ws.send(JSON.stringify({event:"wakeword"}));};
+$("send-btn").onclick=()=>{const t=$("text-in").value.trim();if(!t)return;$("text-in").value="";
+ $("reply").textContent="";ws.send(JSON.stringify({event:"final",text:t}));};
+$("text-in").onkeydown=e=>{if(e.key==="Enter")$("send-btn").click();};
+$("mic-btn").onclick=async()=>{try{
+ const st=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:16000,channelCount:1,
+  echoCancellation:true,noiseSuppression:true}});
+ const ctx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});AC=ctx;
+ const s=ctx.createMediaStreamSource(st),an=ctx.createAnalyser();an.fftSize=512;s.connect(an);
+ const proc=ctx.createScriptProcessor(1536,1,1);s.connect(proc);proc.connect(ctx.destination);
+ const td=new Uint8Array(an.fftSize);
+ proc.onaudioprocess=ev=>{const inp=ev.inputBuffer.getChannelData(0);
+  const pcm=new Int16Array(inp.length);
+  for(let i=0;i<inp.length;i++)pcm[i]=Math.max(-32768,Math.min(32767,inp[i]*32768));
+  an.getByteTimeDomainData(td);let sum=0;
+  for(let i=0;i<td.length;i++){const v=(td[i]-128)/128;sum+=v*v;}
+  const rms=Math.sqrt(sum/td.length);
+  $("meter-bar").style.width=Math.min(100,Math.round(rms*400))+"%";
+  if(rms>0.04&&playing)ws.send(JSON.stringify({event:"barge_in"}));
+  let b="";const by=new Uint8Array(pcm.buffer);
+  for(let i=0;i<by.length;i+=512)b+=String.fromCharCode.apply(null,by.subarray(i,i+512));
+  ws.send(JSON.stringify({event:"audio",pcm_b64:btoa(b)}));};
+ $("mic-btn").textContent="Mic Live \u2713 (Handsfree)";$("mic-btn").disabled=true;
+}catch(err){alert("Microphone access denied: "+err);}};
+</script></body></html>

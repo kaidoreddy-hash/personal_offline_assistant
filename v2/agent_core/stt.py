@@ -1,9 +1,7 @@
-"""STT: Whistle fast-path (EN, 16.9MB) -> faster-whisper multilingual fallback. LOCAL-ONLY.
+"""STT: Whistle fast-path (EN) -> faster-whisper int8 multilingual. LOCAL-ONLY.
 
-Sovereignty rule: both models load from LOCAL files cached by
-scripts/download_models.py. Names/URLs at runtime are refused — that would
-hit the network. Whistle covers EN/DE/FR/ES/IT/NL/PL at ~4x speed;
-faster-whisper tiny covers Hindi/Telugu/Tamil/code-switch. Nothing mocked.
+Greedy decode (beam_size=1) for latency; condition_on_previous_text=False so
+code-switching mid-utterance doesn't contaminate the next window.
 """
 
 from __future__ import annotations
@@ -13,8 +11,8 @@ BASE = Path(__file__).resolve().parent.parent
 
 
 def _local(name: str) -> Path | None:
-    p = BASE / name
-    return p if p.exists() and p.stat().st_size > 0 else None
+    p = Path(name) if Path(name).is_absolute() else BASE / name
+    return p if p.exists() and (p.is_dir() or p.stat().st_size > 0) else None
 
 
 class STT:
@@ -24,36 +22,35 @@ class STT:
         self.backend = "none"
         self._whistle = None
         self._fw = None
-        if want in ("auto", "whistle") and _local(
-            s.get("whistle_path", "models/whistle.cact")
-        ):
-            try:
-                from needle import Whistle  # type: ignore
+        if want in ("auto", "whistle"):
+            wp = _local(s.get("whistle_path", "models/whistle.cact"))
+            if wp:
+                try:
+                    from needle import Whistle  # type: ignore
 
-                self._whistle = Whistle(
-                    weights=str(BASE / s.get("whistle_path", "models/whistle.cact"))
-                )
-                self.backend = "whistle"
-            except Exception:
-                self._whistle = None
+                    self._whistle = Whistle(weights=str(wp))
+                    self.backend = "whistle"
+                except Exception:
+                    self._whistle = None
         if want in ("auto", "faster-whisper"):
-            mp = s.get("model_path", "models/stt-tiny")
-            p = Path(mp) if Path(mp).is_absolute() else BASE / mp
-            if (p.is_dir() and any(p.iterdir())) or (
-                p.is_file() and p.stat().st_size > 0
-            ):
+            p = _local(s.get("model_path", "models/stt-tiny"))
+            if p:
                 try:
                     from faster_whisper import WhisperModel  # type: ignore
 
                     self._fw = WhisperModel(
-                        str(p), device="cpu", compute_type=s.get("compute_type", "int8")
+                        str(p),
+                        device="cpu",
+                        compute_type=s.get("compute_type", "int8"),
+                        cpu_threads=4,
                     )
                     self.backend = "whistle+fw" if self._whistle else "faster-whisper"
                 except Exception:
                     self._fw = None
 
     def transcribe(self, pcm16: bytes, language: str | None = None) -> str:
-        # Whistle fast-path for European langs (incl. auto-detect EN); fw for the rest.
+        if not pcm16:
+            return ""
         if self._whistle is not None and (
             language is None or language in ("en", "de", "fr", "es", "it", "nl", "pl")
         ):
@@ -75,11 +72,21 @@ class STT:
                     if isinstance(r, dict) and r.get("text"):
                         return str(r["text"]).strip()
             except Exception:
-                pass  # fall through to faster-whisper
+                pass
         if self._fw is not None:
-            import numpy as np  # type: ignore
+            try:
+                import numpy as np  # type: ignore
 
-            a = np.frombuffer(pcm16, dtype=np.int16).astype("float32") / 32768.0
-            segs, _ = self._fw.transcribe(a, language=language)
-            return " ".join(s.text for s in segs).strip()
+                a = np.frombuffer(pcm16, dtype=np.int16).astype("float32") / 32768.0
+                segs, _ = self._fw.transcribe(
+                    a,
+                    language=language,
+                    beam_size=1,
+                    best_of=1,
+                    temperature=0.0,
+                    condition_on_previous_text=False,
+                )
+                return " ".join(s.text for s in segs).strip()
+            except Exception:
+                return ""
         return ""

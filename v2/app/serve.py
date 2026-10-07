@@ -1,14 +1,11 @@
 """v2 serve: FastAPI + WS full-duplex. Fully offline — no runtime downloads.
 
-Offline enforcement: HF/transformers offline flags are set at import unless
-V2_ALLOW_NET=1 (pre-cache run). STT/VAD/TTS load LOCAL files only and fall
-back to mock/energy — they never hit the network.
-Audio path is local: browser streams 16k PCM frames over WS, server runs
-faster-whisper locally, replies with Piper WAV (local) — no Web Speech API.
+Frame-aligned 96ms audio pump: wakeword (dormant) -> VAD -> accumulate ->
+live STT -> turn detect -> final -> respond, with barge-in during playback.
 """
 
 from __future__ import annotations
-import asyncio, base64, json, os, sys
+import asyncio, base64, json, os, sys, time
 from pathlib import Path
 
 if os.environ.get("V2_ALLOW_NET") != "1":
@@ -27,6 +24,7 @@ cfg = load()
 app = FastAPI(title="tobi v2 s2s offline")
 WEB = Path(__file__).parent / "web"
 app.mount("/static", StaticFiles(directory=WEB), name="static")
+FRAME_BYTES = 3072  # 96ms @ 16kHz 16-bit mono
 
 
 @app.get("/")
@@ -36,11 +34,12 @@ def index():
 
 @app.get("/health")
 def health():
-    dx = FullDuplex(cfg)  # cheap: reports which backends resolved locally
+    dx = FullDuplex(cfg)
     return {
         "ok": True,
         "llm": cfg.get("llm", {}).get("backend"),
         "vad": "silero-onnx" if dx.vad._sess is not None else "energy",
+        "wakeword": dx.ww.backend,
         "stt": dx.stt.backend,
         "tts": dx.tts.backend,
         "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
@@ -50,7 +49,7 @@ def health():
 def _emit(e):
     if e.kind == "state":
         return {"event": e.kind, "state": e.data}
-    if e.kind in ("live_transcript", "llm_chunk", "tts_text"):
+    if e.kind in ("live_transcript", "llm_chunk", "tts_text", "barge_in"):
         return {"event": e.kind, "text": e.data}
     if e.kind == "tts_audio":
         return {"event": e.kind, "wav_b64": e.data}
@@ -61,8 +60,9 @@ def _emit(e):
 async def ws(sock: WebSocket):
     await sock.accept()
     dx = FullDuplex(cfg)
-    await sock.send_json({"event": "state", "state": "dormant"})
-    pcm_buf = bytearray()
+    await sock.send_json({"event": "state", "state": dx.state})
+    pcm_buf, turn_buf = bytearray(), bytearray()
+    last_stt = 0.0
 
     async def watchdog():
         while True:
@@ -73,43 +73,61 @@ async def ws(sock: WebSocket):
     wd = asyncio.create_task(watchdog())
     try:
         while True:
-            raw = await sock.receive_text()
             try:
-                msg = json.loads(raw)
+                msg = json.loads(await sock.receive_text())
             except Exception:
                 continue
-            ev = msg.get("event")
+            ev, out = msg.get("event"), []
+
             if ev == "wakeword":
-                out = dx.on_wakeword()
-            elif ev == "partial":
-                out = dx.on_partial(msg.get("text", ""))
-            elif ev == "final":
-                out = dx.on_final(msg.get("text", ""))
+                out += dx.on_wakeword()
+                turn_buf.clear()
+            elif ev == "playback_done":
+                out += dx.on_playback_done()
+                turn_buf.clear()
             elif ev == "barge_in":
-                out = dx.on_barge_in()
-            elif ev == "audio":  # local PCM 16k mono base64 from browser
+                out += dx.on_barge_in()
+                turn_buf.clear()
+            elif ev == "final":
+                if msg.get("text", "").strip():
+                    out += dx.on_final(msg["text"])
+                    turn_buf.clear()
+            elif ev == "audio":
                 try:
                     pcm_buf.extend(base64.b64decode(msg.get("pcm_b64", "")))
                 except Exception:
                     pass
-                out = []
-                # 1.5s window -> local STT -> live transcript (offline)
-                while len(pcm_buf) >= 16000 * 2 * 3 // 2:
-                    chunk = bytes(pcm_buf[: 16000 * 2 * 2])
-                    del pcm_buf[: 16000 * 2 * 2]
+                while len(pcm_buf) >= FRAME_BYTES:
+                    chunk = bytes(pcm_buf[:FRAME_BYTES])
+                    del pcm_buf[:FRAME_BYTES]
+                    if dx.state == "dormant":
+                        if dx.ww.predict(chunk):
+                            out += dx.on_wakeword()
+                            turn_buf.clear()
+                            break
                     is_speech = dx.vad.is_speech(chunk)
                     if dx.state == "responding" and is_speech:
                         out += dx.on_barge_in()
-                    text = dx.stt.transcribe(chunk) if dx.stt.backend != "mock" else ""
-                    if text:
-                        if dx.state == "dormant":
-                            out += dx.on_partial(text)
-                        else:
-                            out += dx.on_partial(text)
-            else:
-                out = []
+                        turn_buf.clear()
+                    if dx.state == "listening":
+                        turn_buf.extend(chunk)
+                        now = time.monotonic()
+                        # live partial transcript ~2x/sec for responsive UI
+                        if now - last_stt > 0.5 and len(turn_buf) >= 16000:
+                            pt = dx.stt.transcribe(bytes(turn_buf))
+                            if pt:
+                                out += dx.on_partial(pt)
+                            last_stt = now
+                        if dx.turn.update(is_speech, dx._partial, 0.096) == "end":
+                            final = dx.stt.transcribe(bytes(turn_buf))
+                            turn_buf.clear()
+                            dx.turn.reset()
+                            if final.strip():
+                                out += dx.on_final(final)
+                            else:
+                                dx._partial = ""
             for e in out:
-                if e.kind == "tts":  # synth WAV locally, send audio not just text
+                if e.kind == "tts":
                     wav = dx.tts.synth(e.data)
                     await sock.send_json({"event": "tts_text", "text": e.data})
                     if wav:
@@ -127,15 +145,16 @@ async def ws(sock: WebSocket):
         wd.cancel()
 
 
-def demo():  # ponytail: one runnable check
+def demo():
     from agent_core.llm_stub import HARDCODED_RESPONSE
 
     dx = FullDuplex(cfg)
     assert dx.on_wakeword()[0].data == "listening"
     evs = dx.on_final("hello tobi")
-    assert (
-        "".join(e.data for e in evs if e.kind == "llm_chunk") == HARDCODED_RESPONSE
-    ), "stub reply broke"
+    chunks = "".join(e.data for e in evs if e.kind == "llm_chunk")
+    assert chunks == HARDCODED_RESPONSE, f"stub reply failed: {chunks}"
+    assert dx.state == "responding", "must stay responding until playback_done"
+    assert dx.on_playback_done()[0].data == "listening"
     print("demo ok:", HARDCODED_RESPONSE[:60])
 
 
