@@ -117,3 +117,6 @@ class SessionLog:
 
     def crash(self, where: str, error: str):
         self._write("loop_crash", where=where, error=error)
+
+    def partial(self, aid: str, text: str):
+        self._write("partial", aid, text=text)

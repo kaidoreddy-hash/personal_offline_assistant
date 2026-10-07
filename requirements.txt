@@ -22,11 +22,12 @@ onnxruntime>=1.16            # CPUExecutionProvider. Silero VAD v5 + SmartTurn v
                              # Whole speech stack is ~19MB of ONNX.
 
 # --- 3. Speech engines ---
-cactus-needle[mic]>=3.1.2    # Whistle STT: 16.9MB .cact, en+de+fr+es+it+nl+pl.
-                             # Ships manylinux2014_aarch64 + musllinux_1_2_aarch64
+cactus-needle[mic]>=3.1.2    # Whistle STT, English scope (model covers 7 langs,
+                             # we pin en). 16.9MB .cact. Ships
+                             # manylinux2014_aarch64 + musllinux_1_2_aarch64
                              # wheels — no build step on the Pi.
-piper-tts>=1.2               # TTS. Voices download once into models/piper/, then
-                             # fully offline. en_US-ryan-high, es_MX-claude-high.
+piper-tts>=1.2               # TTS, English-only scope. Voice downloads once into
+                             # models/piper/, then fully offline (en_US-ryan-high).
 openwakeword>=0.6.0          # Wake word (DORMANT gate). Reuses onnxruntime.
                              # pip pulls scikit-learn+scipy (training-only, never
                              # imported at runtime). Models vendored once into

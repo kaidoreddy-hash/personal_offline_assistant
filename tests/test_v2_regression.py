@@ -59,6 +59,27 @@ def test_frame_dbfs_scale():
     assert -1.0 < frame_dbfs(full) < 1.0  # full scale ~ 0 dBFS
 
 
+def test_live_extend_never_walks_backwards():
+    from v2.pipeline import Pipeline
+
+    p = Pipeline()
+    p._live_extend("he hoped there")
+    assert p._live_words == ["he", "hoped", "there"]
+    p._live_extend("he hoped there would be")  # agrees: extends
+    assert p._live_words == ["he", "hoped", "there", "would", "be"]
+    p._live_extend("he hoped their would be stew")  # revises committed: held
+    assert p._live_words == ["he", "hoped", "there", "would", "be"]
+    p._live_extend("")  # empty pass: held
+    assert p._live_words == ["he", "hoped", "there", "would", "be"]
+
+
+def test_turn_tail_bounded():
+    seg = TurnSegmenter(SileroVAD(), SmartTurnJudge())
+    seg._buf = bytearray(b"\x01\x02" * 16000 * 6)  # 6s of bytes
+    assert len(seg.tail(5.0)) == int(16000 * 2 * 5.0)
+    assert seg.tail(5.0) == bytes(seg._buf[-int(16000 * 2 * 5.0) :])
+
+
 def test_stt_gate_silence_no_model():
     text, lang, lp = transcribe(_silence(1.0), language="en")
     assert (text, lang, lp) == ("", "", 0.0)

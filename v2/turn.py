@@ -97,6 +97,10 @@ class TurnSegmenter:
         self.reset()
         return seg, ("noise" if noisy else "speech")
 
+    def tail(self, max_s: float = 5.0) -> bytes:
+        """Last N seconds of the in-progress turn, for live partial decodes."""
+        return bytes(self._buf[-int(16000 * 2 * max_s) :])
+
     def feed(self, pcm: bytes, chunk_ms: float = 32.0):
         """Returns (bytes, kind) when a segment is final, kind 'speech'|'noise'.
         None while in-progress."""

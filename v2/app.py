@@ -51,7 +51,7 @@ let ws;
 function conn(){ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws');
  ws.onmessage=e=>{const m=JSON.parse(e.data);
   if(m.state){st.textContent=m.state; dot.className='dot '+m.state.toLowerCase();}
-  if(m.transcript!==undefined) box.textContent=m.transcript||'(listening…)';
+  if(m.transcript!==undefined){box.textContent=m.transcript||'(listening…)'; box.style.opacity=m.partial?'0.65':'1';}
   if(m.lang) lang.textContent=m.lang;
   if(m.meta) meta.textContent=m.meta;};
  ws.onclose=()=>setTimeout(conn,1000);}
@@ -86,8 +86,15 @@ def _state_cb(s: str):
     _push({"state": s})
 
 
-def _partial_cb(text: str, lang: str, ms: float):
-    _push({"transcript": text, "lang": lang, "meta": f"stt {ms:.0f} ms"})
+def _partial_cb(text: str, lang: str, ms: float, partial: bool = False):
+    _push(
+        {
+            "transcript": text,
+            "lang": lang,
+            "meta": ("live…" if partial else f"stt {ms:.0f} ms"),
+            "partial": partial,
+        }
+    )
 
 
 @asynccontextmanager

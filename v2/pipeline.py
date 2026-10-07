@@ -23,6 +23,9 @@ from v2.wakeword import WakeWord
 BARGE_IN_DBFS = -35.0
 BARGE_IN_VOICE_MS = 120.0
 BARGE_IN_GRACE_MS = 300.0  # reply onset can't cut itself (own-voice echo)
+PART_WINDOW_S = 5.0  # live partials re-decode at most this much (flat cost)
+PART_CADENCE_MS = 350.0  # one live pass per turn per this interval
+PART_MIN_S = 0.75  # don't decode before the turn holds this much audio
 
 
 class Pipeline:
@@ -45,17 +48,22 @@ class Pipeline:
         self._speak_grace_until = 0.0  # onset grace: own voice can't cut itself
         self.session: Optional[SessionLog] = None
         self._n = 0  # attempt counter within the session
+        self._live_words: list = []  # anchored live transcript (never rewrites)
+        self._live_at = 0.0
 
     # ---- UI callbacks (set by app.py)
     def on_state(self, cb: Callable[[str], None]):
         self._state_cb = cb
 
-    def on_partial(self, cb: Callable[[str, str, float], None]):
+    def on_partial(self, cb: Callable[[str, str, float, bool], None]):
         self._partial_cb = cb
 
     def _on_state(self, s: str):
         if self._state_cb:
             self._state_cb(s)
+
+    # _partial_cb(text, lang, ms, partial) — final commits pass partial=False
+    # positionally, live passes pass partial=True.
 
     # ---- session lifecycle (UI Start/Stop). One file per session.
     def start_session(self) -> str:
@@ -123,10 +131,48 @@ class Pipeline:
         """VAD edge -> open attempt, log levels. Single caller: the loop."""
         self.seg.turn_started = False
         self._ensure_turn()
+        self._live_words = []
+        self._live_at = 0.0
         if self.session and self.engine.attempt:
             self.session.turn_start(
                 self.engine.attempt, self.seg.start_db, self.seg.start_prob
             )
+
+    def _live_extend(self, hypo: str):
+        """Anchored commit: committed words are append-only. A hypothesis that
+        revises already-committed words is ignored (waits for the next pass);
+        one that agrees extends. Text on screen never walks backwards."""
+        hw = hypo.split()
+        n = 0
+        for a, b in zip(self._live_words, hw):
+            if a != b:
+                break
+            n += 1
+        if n >= len(self._live_words):
+            self._live_words = hw
+
+    def _live_pass(self, now: float):
+        """One bounded live decode of the growing turn. Flat cost: the window
+        is capped, so pass time never grows with turn length."""
+        if now - self._live_at < PART_CADENCE_MS / 1000.0:
+            return
+        self._live_at = now
+        tail = self.seg.tail(PART_WINDOW_S)
+        if len(tail) < int(16000 * 2 * PART_MIN_S):
+            return
+        text, lang, _lp = transcribe(tail, language=self.lang)
+        if not text.strip():
+            return
+        before = len(self._live_words)
+        self._live_extend(text)
+        if len(self._live_words) <= before:
+            return  # revision, not progress: stay quiet
+        shown = " ".join(self._live_words)
+        aid = self.engine.attempt
+        if self.session and aid:
+            self.session.partial(aid, shown)
+        if self._partial_cb:
+            self._partial_cb(shown, lang, 0.0, True)
 
     def _end_turn(self, reason: str):
         if self.session and self.engine.attempt:
@@ -246,8 +292,11 @@ class Pipeline:
             if self.seg.turn_started:
                 self._on_turn_started()
             if out is None:
+                if self.seg._speaking:
+                    self._live_pass(now)
                 continue
             if isinstance(out, tuple) and out[1] == "noise":
+                self._live_words = []
                 self._end_turn("noise_only")
                 continue
             seg_bytes, kind = out
@@ -265,14 +314,17 @@ class Pipeline:
                 self.session.smart_turn(aid, self.seg.last_p, self.seg.p_complete)
             if not text.strip():
                 # nothing heard: no reply, no TTS, stay LISTENING
+                self._live_words = []
                 self._end_turn("empty_stt")
                 continue
             if self.session and aid and self.echo.is_echo(text):
                 # mic heard our own speaker, not the user (v1 is_echo pattern)
+                self._live_words = []
                 self._end_turn("echo_self")
                 continue
             if self._partial_cb:
-                self._partial_cb(text, lang, stt_ms)
+                self._partial_cb(text, lang, stt_ms, False)
+            self._live_words = []
             self.engine.force_state(THINKING)
             reply = reply_for(text, lang)
             t1 = time.perf_counter()

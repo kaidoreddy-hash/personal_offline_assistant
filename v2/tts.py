@@ -1,23 +1,20 @@
-"""Piper TTS for v2 — en + es. Voices load from models/piper/; the first run
-on a new machine may fetch a voice once, then it is offline forever.
-Windows pip wheels ship a stale compiled-in espeak path, so point Piper at
-the real espeak-ng-data dir. Sample rate is resampled to 16k for the sink."""
+"""Piper TTS for v2 — English-only scope. Voice loads from models/piper/;
+the first run on a new machine may fetch it once, then it is offline
+forever. Windows pip wheels ship a stale compiled-in espeak path, so point
+Piper at the real espeak-ng-data dir. Output resampled to 16k for the sink."""
 
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 
 _SR_OUT = 16000
 _MODELS = Path(__file__).resolve().parent.parent / "models"
 
-VOICES: Dict[str, str] = {
-    "en": "en_US-ryan-high",
-    "es": "es_MX-claude-high",  # absent -> English fallback below
-}
+VOICE = "en_US-ryan-high"
 
-_cache: Dict[str, object] = {}
+_cache: dict = {}
 
 
 def _espeak_dir():
@@ -30,8 +27,8 @@ def _espeak_dir():
         return None
 
 
-def _voice_onnx(voice: str) -> Optional[str]:
-    p = _MODELS / "piper" / f"{voice}.onnx"
+def _voice_onnx() -> Optional[str]:
+    p = _MODELS / "piper" / f"{VOICE}.onnx"
     if p.exists():
         return str(p)
     try:  # one-time fetch
@@ -39,29 +36,29 @@ def _voice_onnx(voice: str) -> Optional[str]:
 
         vdir = _MODELS / "piper"
         vdir.mkdir(parents=True, exist_ok=True)
-        download_voice(voice, vdir)
+        download_voice(VOICE, vdir)
         return str(p) if p.exists() else None
     except Exception:
         return None
 
 
-def _synth(text: str, voice: str) -> Optional[bytes]:
+def _synth(text: str) -> Optional[bytes]:
     try:
         from piper import PiperVoice
     except Exception:
         return None
-    onnx = _voice_onnx(voice)
+    onnx = _voice_onnx()
     if onnx is None:
         return None
     try:
-        if voice not in _cache:
+        if VOICE not in _cache:
             kw = {}
             espeak = _espeak_dir()
             if espeak:
                 kw["espeak_data_dir"] = espeak
-            _cache[voice] = PiperVoice.load(onnx, **kw)
+            _cache[VOICE] = PiperVoice.load(onnx, **kw)
         parts, sr = [], _SR_OUT
-        for chunk in _cache[voice].synthesize(text):
+        for chunk in _cache[VOICE].synthesize(text):
             arr = getattr(chunk, "audio_float_array", None)
             if getattr(chunk, "sample_rate", None):
                 sr = int(chunk.sample_rate)
@@ -83,9 +80,4 @@ def synthesize(text: str, lang: str = "en") -> bytes:
     text = (text or "").strip()
     if not text:
         return b""
-    code = (lang or "en").lower()
-    return (
-        _synth(text, VOICES.get(code, VOICES["en"]))
-        or _synth(text, VOICES["en"])
-        or b"\x00\x00" * (_SR_OUT // 4)  # 250ms silence, never choke playback
-    )
+    return _synth(text) or b"\x00\x00" * (_SR_OUT // 4)  # never choke playback
