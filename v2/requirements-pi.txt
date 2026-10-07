@@ -2,6 +2,7 @@
 # Install AFTER requirements.txt:  pip install -r requirements-pi.txt
 # Pre-cache online once:  python scripts/download_models.py  (then HF_HUB_OFFLINE=1 offline)
 -r requirements.txt
+cactus-needle>=3.0
 onnxruntime>=1.17          # VAD Silero-v5 ONNX (~2MB) + Smart-Turn optional. NOT torch (torch ~800MB kills 4GB).
 faster-whisper>=1.0        # STT tiny.en int8 (~75MB, ~200MB RAM). compute_type=int8 in stt.py.
 openwakeword>=0.6          # wakeword hey_jarvis stand-in (~30MB) until custom hey_tobi trained

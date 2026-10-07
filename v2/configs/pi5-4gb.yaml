@@ -13,7 +13,8 @@ turn:
   backend: auto  # smart-turn-onnx | adaptive (adaptive default on 4GB, saves RAM)
   min_speech_ms: 300
 stt:
-  backend: auto  # faster-whisper (tiny multilingual int8 ~75MB) | mock
+  backend: auto  # whistle (16.9MB fast-path) + faster-whisper tiny fallback | mock=not cached
+  whistle_path: models/whistle.cact
   model: tiny
   model_path: models/stt-tiny
   compute_type: int8

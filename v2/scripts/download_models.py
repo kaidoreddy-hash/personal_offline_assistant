@@ -16,6 +16,8 @@ FILES = {
     # TTS Piper lessac LOW (~63MB) + config. -low not -medium saves RAM/disk.
     "en_US-lessac-low.onnx": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx",
     "en_US-lessac-low.onnx.json": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx.json",
+    # Whistle STT (Cactus, 16.9MB, EN/DE/FR/ES/IT/NL/PL fast-path).
+    "whistle.cact": "https://huggingface.co/Cactus-Compute/whistle/resolve/main/whistle.cact",
 }
 # STT tiny MULTILINGUAL (~75MB int8, not tiny.en) snapshot into models/stt-tiny
 # via huggingface_hub (online pre-cache only). Runtime loads LOCAL dir only.
