@@ -19,7 +19,10 @@ stt:
 tts:
   voice: models/tts/en_US-lessac-low.onnx
   gain: 1.0
-brain: { type: stub }
+brain:
+  type: stub                   # sovereign default on the Pi; swap to 'llm' (llama.cpp) later
+  model: ""
+  api_key_env: GROQ_API_KEY
 greeting: "I'm listening."
 dormancy: { timeout_s: 90 }
 session: { log_dir: logs, save_utterance_audio: true }

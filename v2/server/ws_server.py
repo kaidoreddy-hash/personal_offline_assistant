@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import agent_core  # noqa: F401,E402 — offline env guards first
+from agent_core.brain.base import Brain  # noqa: E402
+from agent_core.brain.groq import GroqBrain  # noqa: E402
 from agent_core.brain.stub import StubBrain  # noqa: E402
 from agent_core.config import Config, load  # noqa: E402
 from agent_core.debuglog import SessionLog  # noqa: E402
@@ -36,6 +38,35 @@ UI_DIR = Path(__file__).resolve().parent / "ui"
 
 _cached: dict[str, object] = {}
 _cache_lock = threading.Lock()
+_env_loaded = False
+
+
+def _load_env() -> None:
+    """Load v2/.env (GROQ_API_KEY, TOBI_TG_TOKEN, TOBI_TG_CHAT) if present."""
+    global _env_loaded
+    if _env_loaded:
+        return
+    _env_loaded = True
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT / ".env")
+    except ImportError:
+        pass
+
+
+def make_brain(cfg: Config, shared: dict) -> Brain:
+    """Brain factory: 'groq' dev bridge (keyed) or the offline stub."""
+    if cfg.brain.type == "groq":
+        _load_env()
+        brain: Brain = GroqBrain(api_key_env=cfg.brain.api_key_env, model=cfg.brain.model,
+                                 store=shared["store"], embedder=shared["embedder"],
+                                 router=shared["router"])
+        if brain.has_key():
+            return brain
+        print(f"[brain] GROQ key {cfg.brain.api_key_env} missing — falling back to StubBrain",
+              file=sys.stderr, flush=True)
+    return StubBrain(router=shared["router"], store=shared["store"], embedder=shared["embedder"])
 
 
 def _get_shared(cfg: Config) -> dict[str, object]:
@@ -124,7 +155,7 @@ async def _ws_session(ws, cfg: Config, shared: dict, log: SessionLog, trace) -> 
             cfg, log,
             emit=lambda d: asyncio.create_task(send_json(d)),
             emit_audio=lambda b: asyncio.create_task(send_audio(b)),
-            brain=StubBrain(router=shared["router"], store=shared["store"], embedder=shared["embedder"]),
+            brain=make_brain(cfg, shared),
             stt=shared["stt"], turn=shared["turn"], tts=shared["tts"],
             meeting_mode=meeting,
             store=shared["store"],
@@ -132,6 +163,7 @@ async def _ws_session(ws, cfg: Config, shared: dict, log: SessionLog, trace) -> 
 
     pipeline = build_pipeline(False)
     await send_json({"type": "hello", "log_dir": str(log.dir), "log_events": str(log.events_path),
+                     "brain": cfg.brain.type,
                      "wake_words": cfg.wake.names if not state["meeting"] else []})
 
     async def dormancy_watch() -> None:
@@ -185,6 +217,8 @@ async def _ws_session(ws, cfg: Config, shared: dict, log: SessionLog, trace) -> 
                 t = ctl.get("type")
                 if t == "mute":
                     pipeline.set_muted(bool(ctl.get("value")))
+                elif t == "playback":
+                    pipeline.set_client_playback(bool(ctl.get("value")))
                 elif t == "meeting":
                     on = bool(ctl.get("value"))
                     if on != state["meeting"]:

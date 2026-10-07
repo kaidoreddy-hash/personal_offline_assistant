@@ -78,7 +78,9 @@ class TtsCfg:
 
 @dataclass(frozen=True)
 class BrainCfg:
-    type: str
+    type: str                       # 'stub' | 'groq' (dev bridge) | later 'llm'
+    model: str = "llama-3.3-70b-versatile"
+    api_key_env: str = "GROQ_API_KEY"
 
 
 @dataclass(frozen=True)

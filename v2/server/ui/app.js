@@ -28,6 +28,24 @@ let ws = null;
 let ctx = null, workletNode = null, mediaStream = null;
 let sources = [], nextStartTime = 0;
 
+// Echo gate: while TTS is playing we stop sending mic frames, so open speakers
+// cannot feed the agent its own voice. With a headset (or the Pi's AEC) flip
+// suppressMic to false to get true voice barge-in.
+let suppressMic = true;
+let playing = false, playEndTimer = null;
+
+function setPlaying(on) {
+  playing = on;
+  if (playEndTimer) { clearTimeout(playEndTimer); playEndTimer = null; }
+  if (!on && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'playback', value: false }));
+  }
+}
+
+function setMicPaused(paused) {
+  if (workletNode) workletNode.port.postMessage({ pause: paused });
+}
+
 function setState(s) {
   els.state.textContent = meetingMode ? `meeting · ${s}` : s;
   const color = meetingMode ? '#a855f7' : (STATE_COLORS[s] || '#6b7280');
@@ -64,6 +82,8 @@ function stopPlayback() {
   sources.forEach((s) => { try { s.stop(); } catch (e) {} });
   sources = [];
   nextStartTime = 0;
+  setPlaying(false);
+  setMicPaused(false);
 }
 
 function queueAudio(pcm16) {
@@ -80,7 +100,22 @@ function queueAudio(pcm16) {
   src.start(at);
   nextStartTime = at + buf.duration;
   sources.push(src);
-  src.onended = () => { sources = sources.filter((s) => s !== src); };
+  src.onended = () => {
+    sources = sources.filter((s) => s !== src);
+    if (!sources.length) {
+      // playback finished + 300ms room tail, then the mic opens again
+      if (playEndTimer) clearTimeout(playEndTimer);
+      playEndTimer = setTimeout(() => {
+        setPlaying(false);
+        setMicPaused(false);
+      }, 300);
+    }
+  };
+  if (!playing) {
+    setPlaying(true);
+    setMicPaused(suppressMic);
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'playback', value: true }));
+  }
 }
 
 async function start() {
@@ -99,7 +134,10 @@ async function start() {
   ctx = new AudioContext({ sampleRate: 16000 });
   await ctx.audioWorklet.addModule('/mic-worklet.js');
   workletNode = new AudioWorkletNode(ctx, 'mic-capture');
-  workletNode.port.onmessage = (e) => { if (ws && ws.readyState === 1) ws.send(e.data); };
+  workletNode.port.onmessage = (e) => {
+    if (suppressMic && playing) return; // echo gate: never send while TTS plays
+    if (ws && ws.readyState === 1) ws.send(e.data);
+  };
   ctx.createMediaStreamSource(mediaStream).connect(workletNode); // not to destination: no feedback loop
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';

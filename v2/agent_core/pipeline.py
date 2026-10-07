@@ -95,6 +95,11 @@ class VoicePipeline:
         self._turn_task: asyncio.Task | None = None
         self._force_task: asyncio.Task | None = None
         self._barge = asyncio.Event()
+        self._barge_armed = False          # arms once the mic is quiet during playback
+        self._client_playing = False       # client is playing TTS (echo gate)
+        self._client_playback_end = 0.0    # playback end + tail margin (mono time)
+        self._utt_start_mono: float | None = None
+        self._reply_end = 0.0
         self._last_voice = time.monotonic()
         self._wake_ok_at = 0.0          # wake refractory deadline
         self._wake_grace_until = 0.0    # drop wake-phrase tails right after a wake
@@ -124,18 +129,28 @@ class VoicePipeline:
             self._last_voice = time.monotonic()
 
         if self.state == SPEAKING:
-            # Barge-in is disarmed during the wake grace window: the user's own
-            # wake-phrase tail is near-end speech (AEC won't remove it) and must
-            # not kill the greeting.
-            if self.tracker.in_utterance and time.monotonic() >= self._wake_grace_until:
-                self._barge_in()
+            if self.tracker.in_utterance:
+                # Barge-in is disarmed during the wake grace window AND until the
+                # mic has been quiet once: the echo tail of the previous reply
+                # must not kill the fresh reply.
+                if self._barge_armed and time.monotonic() >= self._wake_grace_until:
+                    self._barge_in()
+            else:
+                self._barge_armed = True
             return
 
         if self.tracker.in_utterance:
+            if self._utt_start_mono is None:
+                self._utt_start_mono = time.monotonic()
             self._frames.append(frame)
             self._maybe_partial()
         if utterance is not None:
-            if time.monotonic() < self._wake_grace_until and len(utterance) < 0.7 * 16000:
+            started = self._utt_start_mono
+            self._utt_start_mono = None
+            if started is not None and -0.7 < started - self._client_playback_end < 1.2 and len(utterance) < 1.5 * 16000:
+                # Started inside the playback tail window: room echo of our own voice.
+                self.log.log("echo_tail_dropped", dur_s=round(len(utterance) / 16000, 2))
+            elif time.monotonic() < self._wake_grace_until and len(utterance) < 0.7 * 16000:
                 # Tail of the wake phrase itself — not a user request.
                 self.log.log("wake_tail_dropped", dur_s=round(len(utterance) / 16000, 2))
             else:
@@ -248,6 +263,7 @@ class VoicePipeline:
         first_audio_ms is None when barged in (reply aborted).
         """
         self._barge.clear()
+        self._barge_armed = not self.tracker.in_utterance
         first_audio_ms: float | None = None
         reply_text = ""
         self._set_state(SPEAKING)
@@ -273,6 +289,7 @@ class VoicePipeline:
         if self._barge.is_set():
             return None, reply_text
         self._set_state(LISTENING)  # greeting/turn finished speaking: open the mic again
+        self._reply_end = time.monotonic()
         return first_audio_ms, reply_text
 
     def _speak_text(self, text: str) -> None:
@@ -335,6 +352,13 @@ class VoicePipeline:
                 self.log.log("dormant")
                 self._set_state(DORMANT)
                 self._pending = []
+
+    def set_client_playback(self, playing: bool) -> None:
+        """Client reports TTS playback start/stop (echo gate bookkeeping)."""
+        self._client_playing = playing
+        if not playing:
+            self._client_playback_end = time.monotonic() + 0.6  # room tail margin
+        self.log.log("playback", on=playing)
 
     def set_muted(self, muted: bool) -> None:
         self.muted = muted

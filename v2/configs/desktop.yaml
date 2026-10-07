@@ -19,7 +19,10 @@ stt:
 tts:
   voice: models/tts/en_US-lessac-low.onnx
   gain: 1.0
-brain: { type: stub }
+brain:
+  type: groq                   # dev bridge for E2E testing; falls back to stub without a key
+  model: llama-3.3-70b-versatile
+  api_key_env: GROQ_API_KEY
 greeting: "I'm listening."
 dormancy: { timeout_s: 90 }
 session: { log_dir: logs, save_utterance_audio: true }

@@ -64,6 +64,28 @@ def test_stub_brain_routes_tools(store: Store) -> None:
     assert "could not find" in wx or "weather" in wx
 
 
+def test_groq_brain_messages_and_fallback(store: Store) -> None:
+    from agent_core.brain.groq import GroqBrain
+
+    brain = GroqBrain(api_key_env="GROQ_API_KEY_TEST_SHOULD_NOT_EXIST", store=store,
+                      embedder=Embedder(str(ROOT / "models" / "embeddings")),
+                      router=ToolRouter(CFG))
+    assert not brain.has_key()
+
+    # Message building: RAG context included, user turn last.
+    msgs = brain._messages("what did we discuss about the demo?", [])
+    assert msgs[-1]["role"] == "user"
+    assert any("RELEVANT PAST UTTERANCES" in m["content"] for m in msgs)
+    assert any("hackathon" in m["content"] for m in msgs)
+
+    # Keyless: respond() degrades to a spoken message, never an exception.
+    async def get_reply() -> str:
+        return "".join([c async for c in brain.respond("hello", [])])
+
+    reply = asyncio.run(get_reply())
+    assert "cannot think" in reply
+
+
 def test_meeting_diarizer_runs(tmp_path) -> None:
     """Smoke: the torch-free embedding extractor labels every segment.
 
