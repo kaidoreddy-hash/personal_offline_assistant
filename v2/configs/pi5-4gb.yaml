@@ -1,24 +1,28 @@
 # Pi 5 4GB profile. English-first. Telugu re-enable later.
 # No user-facing timers. Internal numbers below are ceilings, not UX.
+# All models quantized/tiny: total ~110MB disk, ~500MB RAM — leaves room for friend's Q4 SLM.
 sample_rate: 16000
 wakeword: "hey tobi"
+wakeword_onnx: models/hey_jarvis_v0.1.onnx  # stand-in until hey_tobi trained
 dormant_after_silence_s: 30
 vad:
-  backend: auto  # silero-v5 | energy
+  backend: auto  # silero-v5 (onnxruntime, models/silero_vad_v5.onnx ~2MB) | energy
   threshold: 0.6
+  onnx_path: models/silero_vad_v5.onnx
 turn:
-  backend: auto  # smart-turn-onnx | adaptive
+  backend: auto  # smart-turn-onnx | adaptive (adaptive default on 4GB, saves RAM)
   min_speech_ms: 300
 stt:
-  backend: auto  # faster-whisper | vosk | mock
+  backend: auto  # faster-whisper (tiny.en int8 ~75MB) | mock
   model: tiny.en
   model_path: models/stt-tiny.en
+  compute_type: int8
 llm:
-  backend: stub  # stub | openai-compatible (friend's offline SLM)
+  backend: stub  # stub | openai-compatible (friend's offline SLM, e.g. Qwen2.5-0.5B Q4_K_M ~400MB on :8080)
   base_url: http://127.0.0.1:8080/v1
   model: local-slm
 tts:
-  backend: auto  # piper | mock (browser speechSynthesis on PC)
-  voice: models/en_US-lessac-medium.onnx
+  backend: auto  # piper (models/en_US-lessac-low.onnx ~30MB) | mock (browser speechSynthesis on PC)
+  voice: models/en_US-lessac-low.onnx
 logging:
   dir: logs

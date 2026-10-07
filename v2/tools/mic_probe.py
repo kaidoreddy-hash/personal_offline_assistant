@@ -12,7 +12,7 @@ cfg = load()
 logp = _log.new_attempt(cfg, "mic-probe")
 vad = VAD(cfg)
 print(
-    f"backend: {'silero' if vad._silero is not None else 'energy-fallback'} -> {logp}"
+    f"backend: {'silero-onnx' if getattr(vad, '_sess', None) is not None else 'energy-fallback'} -> {logp}"
 )
 try:
     import sounddevice as sd  # optional

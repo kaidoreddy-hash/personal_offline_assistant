@@ -1,0 +1,9 @@
+# Pi 5 4GB full offline stack — all quantized / tiny. Total ~110MB download, ~500MB RAM.
+# Install AFTER requirements.txt:  pip install -r requirements-pi.txt
+# Pre-cache online once:  python scripts/download_models.py  (then HF_HUB_OFFLINE=1 offline)
+-r requirements.txt
+onnxruntime>=1.17          # VAD Silero-v5 ONNX (~2MB) + Smart-Turn optional. NOT torch (torch ~800MB kills 4GB).
+faster-whisper>=1.0        # STT tiny.en int8 (~75MB, ~200MB RAM). compute_type=int8 in stt.py.
+openwakeword>=0.6          # wakeword hey_jarvis stand-in (~30MB) until custom hey_tobi trained
+piper-tts>=1.2             # TTS offline, CPU ONNX. Voice below is -low (~30MB), not -medium.
+# ctranslate2 is pulled by faster-whisper (int8 CPU). No llama.cpp here — friend's SLM runs separate on :8080.

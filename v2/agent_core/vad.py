@@ -1,38 +1,42 @@
-"""VAD: Silero v5 if torch present, else energy fallback. No UI knobs."""
+"""VAD: Silero-v5 ONNX via onnxruntime (Pi-friendly, ~2MB), else energy fallback."""
 
 from __future__ import annotations
-import os
+from pathlib import Path
 import struct
+
+
+def _vad_onnx_path(cfg: dict) -> Path:
+    p = cfg.get("vad", {}).get("onnx_path", "models/silero_vad_v5.onnx")
+    base = Path(__file__).resolve().parent.parent
+    return Path(p) if Path(p).is_absolute() else base / p
 
 
 class VAD:
     def __init__(self, cfg: dict):
         v = cfg.get("vad", {})
         self.threshold = float(v.get("threshold", 0.6))
-        self._silero = None
-        # ponytail: offline-first — torch.hub.load() downloads on cache miss,
-        # so only try it on an explicit pre-cache run (V2_ALLOW_NET=1).
-        if (
-            v.get("backend", "auto") in ("auto", "silero-v5")
-            and os.environ.get("V2_ALLOW_NET") == "1"
-        ):
-            try:
-                import torch  # type: ignore
+        self._sess = None
+        # ponytail: onnxruntime only (~50MB RAM). torch.hub path deleted —
+        # it pulled ~800MB torch + downloaded at runtime, kills Pi 4GB.
+        if v.get("backend", "auto") in ("auto", "silero-v5"):
+            mp = _vad_onnx_path(cfg)
+            if mp.exists():
+                try:
+                    import onnxruntime as ort  # type: ignore
 
-                self._silero, _ = torch.hub.load(
-                    "snakers4/silero-vad", "silero_vad", trust_repo=True
-                )
-            except Exception:
-                self._silero = None
+                    self._sess = ort.InferenceSession(str(mp))
+                except Exception:
+                    self._sess = None
 
     def is_speech(self, pcm16: bytes) -> bool:
-        if self._silero is not None:
+        if self._sess is not None:
             try:
-                import torch, numpy as np  # type: ignore
+                import numpy as np  # type: ignore
 
                 a = np.frombuffer(pcm16, dtype=np.int16).astype("float32") / 32768.0
-                with __import__("torch").no_grad():
-                    p = float(self._silero(torch.from_numpy(a), 16000).item())
+                # silero-v5 onnx: [batch, samples] float32 -> prob
+                inp = self._sess.get_inputs()[0].name
+                p = float(self._sess.run(None, {inp: a[None, :]})[0].flat[0])
                 return p >= self.threshold
             except Exception:
                 pass
