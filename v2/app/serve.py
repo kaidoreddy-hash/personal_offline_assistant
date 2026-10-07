@@ -62,7 +62,13 @@ async def ws(sock: WebSocket):
     dx = FullDuplex(cfg)
     await sock.send_json({"event": "state", "state": dx.state})
     pcm_buf, turn_buf = bytearray(), bytearray()
+    # ponytail: dormant fallback buffer. Needed when openWakeWord is unavailable
+    # (PC/no wheel) — otherwise transcript wake is unreachable from audio.
+    dormant_buf = bytearray()
+    dormant_hot = False
+    dormant_quiet = 0
     last_stt = 0.0
+    DORMANT_CAP = 16000 * 2 * 2  # ~2s, keeps RAM flat on 4GB
 
     async def watchdog():
         while True:
@@ -100,12 +106,33 @@ async def ws(sock: WebSocket):
                 while len(pcm_buf) >= FRAME_BYTES:
                     chunk = bytes(pcm_buf[:FRAME_BYTES])
                     del pcm_buf[:FRAME_BYTES]
+                    is_speech = dx.vad.is_speech(chunk)
                     if dx.state == "dormant":
                         if dx.ww.predict(chunk):
                             out += dx.on_wakeword()
                             turn_buf.clear()
+                            dormant_buf.clear()
+                            dormant_hot = False
                             break
-                    is_speech = dx.vad.is_speech(chunk)
+                        # no ONNX wakeword -> transcribe the phrase we just heard
+                        if is_speech:
+                            dormant_buf.extend(chunk)
+                            dormant_hot = True
+                            dormant_quiet = 0
+                            if len(dormant_buf) > DORMANT_CAP:
+                                del dormant_buf[: FRAME_BYTES * 3]
+                        elif dormant_hot:
+                            dormant_quiet += 1
+                            if dormant_quiet >= 4 and len(dormant_buf) >= 16000:
+                                heard = dx.stt.transcribe(bytes(dormant_buf))
+                                dormant_buf.clear()
+                                dormant_hot = False
+                                dormant_quiet = 0
+                                if heard:
+                                    out += dx.on_partial(heard)
+                                    if dx.state != "dormant":
+                                        break
+                        continue
                     if dx.state == "responding" and is_speech:
                         out += dx.on_barge_in()
                         turn_buf.clear()
@@ -129,14 +156,18 @@ async def ws(sock: WebSocket):
             for e in out:
                 if e.kind == "tts":
                     wav = dx.tts.synth(e.data)
-                    await sock.send_json({"event": "tts_text", "text": e.data})
+                    # ONE event only: Piper wav if we have it, else browser TTS.
+                    # Sending both made two voices speak over each other.
                     if wav:
                         await sock.send_json(
                             {
                                 "event": "tts_audio",
+                                "text": e.data,
                                 "wav_b64": base64.b64encode(wav).decode(),
                             }
                         )
+                    else:
+                        await sock.send_json({"event": "tts_text", "text": e.data})
                 else:
                     await sock.send_json(_emit(e))
     except Exception:

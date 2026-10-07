@@ -6,16 +6,29 @@ from pathlib import Path
 _DEFAULTS = {
     "sample_rate": 16000,
     "wakeword": "hey tobi",
+    "wakeword_onnx": "models/hey_jarvis_v0.1.onnx",
     "dormant_after_silence_s": 30,
-    "vad": {"backend": "auto", "threshold": 0.6},
+    # ponytail: MUST mirror configs/pi5-4gb.yaml. Drift here silently disables
+    # the VAD (0.6) and reverts to English-only STT. test_config_drift guards it.
+    "vad": {
+        "backend": "auto",
+        "threshold": 0.2,
+        "onnx_path": "models/silero_vad_v5.onnx",
+    },
     "turn": {"backend": "auto", "min_speech_ms": 300},
-    "stt": {"backend": "auto", "model": "tiny.en", "model_path": "models/stt-tiny.en"},
+    "stt": {
+        "backend": "auto",
+        "model": "tiny",
+        "model_path": "models/stt-tiny",
+        "whistle_path": "models/whistle.cact",
+        "compute_type": "int8",
+    },
     "llm": {
         "backend": "stub",
         "base_url": "http://127.0.0.1:8080/v1",
         "model": "local-slm",
     },
-    "tts": {"backend": "auto", "voice": "models/en_US-lessac-medium.onnx"},
+    "tts": {"backend": "auto", "voice": "models/en_US-lessac-low.onnx"},
     "logging": {"dir": "logs"},
 }
 

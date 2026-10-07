@@ -3,6 +3,7 @@ playback so barge-in works. Client reports playback_done to return to listening.
 """
 
 from __future__ import annotations
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,8 +52,9 @@ class FullDuplex:
         return [TurnEvent("state", "listening"), TurnEvent("log", str(self.log_path))]
 
     def on_partial(self, text: str) -> list[TurnEvent]:
+        # whole-word "tobi" so "october"/"autobiography" can't wake it
         if self.state == "dormant" and (
-            self.wakeword in text.lower() or "tobi" in text.lower()
+            self.wakeword in text.lower() or re.search(r"\btobi\b", text, re.I)
         ):
             return self.on_wakeword()  # PC path: wakeword matched in STT text
         if self.state != "listening":
