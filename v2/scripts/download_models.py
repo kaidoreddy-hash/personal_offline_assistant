@@ -17,7 +17,8 @@ FILES = {
     "en_US-lessac-low.onnx": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx",
     "en_US-lessac-low.onnx.json": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx.json",
 }
-# STT tiny.en (~75MB int8) fetched by faster-whisper on first use, then cached for HF_HUB_OFFLINE=1.
+# STT tiny MULTILINGUAL (~75MB int8, not tiny.en) snapshot into models/stt-tiny
+# via huggingface_hub (online pre-cache only). Runtime loads LOCAL dir only.
 # Friend's SLM later: Qwen2.5-0.5B-Instruct Q4_K_M (~400MB) via llama.cpp on :8080 — NOT here.
 
 
@@ -61,6 +62,27 @@ def _wakeword() -> None:
         print(f"FAIL wakeword: {e} — transcript fallback still works")
 
 
+def _stt_tiny() -> None:
+    """Snapshot Systran/faster-whisper-tiny (multilingual) to models/stt-tiny. Online only."""
+    dest = MODELS / "stt-tiny"
+    if dest.is_dir() and any(dest.iterdir()):
+        print(
+            f"skip stt-tiny ({sum(f.stat().st_size for f in dest.rglob('*') if f.is_file()) // 1024}KB)"
+        )
+        return
+    try:
+        from huggingface_hub import snapshot_download  # type: ignore
+
+        snapshot_download("Systran/faster-whisper-tiny", local_dir=str(dest))
+        print("ok stt-tiny (multilingual tiny, int8-ready)")
+    except ImportError:
+        print(
+            "skip stt-tiny: pip install huggingface_hub (or install requirements-pi.txt)"
+        )
+    except Exception as e:
+        print(f"FAIL stt-tiny: {e} — server runs mock STT until cached")
+
+
 def main() -> None:
     for name, url in FILES.items():
         try:
@@ -68,9 +90,8 @@ def main() -> None:
         except Exception as e:
             print(f"FAIL {name}: {e}")
     _wakeword()
-    print(
-        "done. First STT use downloads tiny.en (online), then HF_HUB_OFFLINE=1 works offline."
-    )
+    _stt_tiny()
+    print("done. Run with HF_HUB_OFFLINE=1 (default in serve.py) for true offline.")
 
 
 if __name__ == "__main__":

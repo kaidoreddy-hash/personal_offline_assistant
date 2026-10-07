@@ -23,6 +23,14 @@ def _proxy_stream(user_text: str, cfg: dict) -> Iterator[str]:
     import httpx  # lazy so stub needs zero deps
 
     llm = cfg.get("llm", {})
+    url = str(llm.get("base_url", ""))
+    # sovereignty guard: friend's SLM must be loopback/LAN — never cloud.
+    host = url.split("://", 1)[-1].split("/", 1)[0].split("@")[-1].split(":")[0].lower()
+    if host not in ("127.0.0.1", "localhost", "::1") and not host.startswith(
+        ("192.168.", "10.", "172.16.")
+    ):
+        yield f"{HARDCODED_RESPONSE} (refused non-local llm.base_url: {url})"
+        return
     try:
         r = httpx.post(
             f"{llm.get('base_url')}/chat/completions",

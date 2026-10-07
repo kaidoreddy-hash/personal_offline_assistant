@@ -1,28 +1,49 @@
-"""STT: faster-whisper if installed (offline path), else mock passthrough."""
+"""STT: faster-whisper LOCAL-ONLY (never downloads at runtime), else mock.
+
+Sovereignty rule: model_path must be a local dir/file already cached by
+scripts/download_models.py. A HuggingFace model *name* is refused — that
+would hit the network at runtime. Multilingual `tiny` (not the English-only
+variant) so Hindi/Telugu/code-switch can re-enable without changing code.
+"""
 
 from __future__ import annotations
 from pathlib import Path
 
 
+def _local_model_dir(cfg: dict) -> Path | None:
+    s = cfg.get("stt", {})
+    mp = s.get("model_path", "models/stt-tiny")
+    base = Path(__file__).resolve().parent.parent
+    p = Path(mp) if Path(mp).is_absolute() else base / mp
+    if p.is_dir() and any(p.iterdir()):
+        return p
+    if p.is_file() and p.stat().st_size > 0:
+        return p
+    return None
+
+
 class STT:
     def __init__(self, cfg: dict):
-        s = cfg.get("stt", {})
         self.backend = "mock"
         self._model = None
-        if s.get("backend", "auto") in ("auto", "faster-whisper"):
-            try:
-                from faster_whisper import WhisperModel  # type: ignore
+        if cfg.get("stt", {}).get("backend", "auto") in ("auto", "faster-whisper"):
+            local = _local_model_dir(cfg)
+            if local is not None:  # local-only: no name -> no download
+                try:
+                    from faster_whisper import WhisperModel  # type: ignore
 
-                mp = s.get("model_path", "models/stt-tiny.en")
-                if Path(mp).exists():
-                    self._model = WhisperModel(mp, device="cpu", compute_type="int8")
+                    self._model = WhisperModel(
+                        str(local),
+                        device="cpu",
+                        compute_type=cfg.get("stt", {}).get("compute_type", "int8"),
+                    )
                     self.backend = "faster-whisper"
-            except Exception:
-                self._model = None
+                except Exception:
+                    self._model = None
 
     def transcribe(self, pcm16: bytes) -> str:
         if self._model is None:
-            return ""  # mock: text arrives via WS partial/final events on PC
+            return ""  # mock: text arrives via WS events until STT cached
         import numpy as np, tempfile, wave  # type: ignore
 
         a = np.frombuffer(pcm16, dtype=np.int16).astype("float32") / 32768.0
