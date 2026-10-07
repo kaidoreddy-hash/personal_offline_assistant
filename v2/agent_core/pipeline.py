@@ -55,6 +55,7 @@ class VoicePipeline:
         turn: SmartTurn,
         tts: PiperTTS,
         meeting_mode: bool = False,
+        store=None,
     ) -> None:
         self.cfg = cfg
         self.log = log
@@ -65,6 +66,9 @@ class VoicePipeline:
         self.turn = turn
         self.tts = tts
         self.meeting_mode = meeting_mode
+        self.store = store
+        self._session_id = store.start_session("meeting" if meeting_mode else "assistant") if store else None
+        self._meeting_audio: list[tuple[int, np.ndarray]] = []  # (t_ms, audio) — RAM only, discarded after diarization
 
         self.vad = SileroVAD(str(Path(cfg.root) / "models" / "silero_vad_v5.onnx"))
         self.tracker = UtteranceTracker(
@@ -206,19 +210,35 @@ class VoicePipeline:
         first_audio_ms, reply_text = await self._play_sentences(
             self._sentences(self.brain.respond(transcript.text, list(self.history))), t_eot
         )
+        if self.store is not None and transcript.text:
+            self.store.add_utterance(self._session_id, round((time.monotonic() - self._t0) * 1000),
+                                     "user", transcript.text, lang=transcript.language)
         if reply_text:
             self.history.append(Turn("assistant", reply_text))
+            if self.store is not None:
+                self.store.add_utterance(self._session_id, round((time.monotonic() - self._t0) * 1000),
+                                         "assistant", reply_text)
         if first_audio_ms is not None:
             self.emit({"type": "latency", "eot_to_first_audio_ms": round(first_audio_ms)})
         self._set_state(LISTENING)
 
     async def _meeting_segment(self, utterance: np.ndarray) -> None:
+        t_ms = round((time.monotonic() - self._t0) * 1000)
         transcript = await self._loop.run_in_executor(None, self.stt.transcribe, utterance)
-        self.log.log("meeting_segment", text=transcript.text, t_ms=round((time.monotonic() - self._t0) * 1000))
+        self.log.log("meeting_segment", text=transcript.text, t_ms=t_ms)
         if self.log.save_utterance_audio:
             self.log.save_wav("meeting_segment", utterance)
-        self.emit({"type": "meeting_segment", "text": transcript.text,
-                   "t_ms": round((time.monotonic() - self._t0) * 1000)})
+        if transcript.text:
+            self._meeting_audio.append((t_ms, utterance))
+            if self.store is not None:
+                self.store.add_utterance(self._session_id, t_ms, "speaker", transcript.text,
+                                         speaker="SPEAKER_?", lang=transcript.language)
+            self.emit({"type": "meeting_segment", "text": transcript.text, "t_ms": t_ms})
+
+    def take_meeting_audio(self) -> list[tuple[int, np.ndarray]]:
+        """Hand the meeting buffer to the diarizer and empty it."""
+        buf, self._meeting_audio = self._meeting_audio, []
+        return buf
 
     # ------------------------------------------------------------- speaking
 
@@ -325,6 +345,12 @@ class VoicePipeline:
         for t in (self._turn_task, self._partial_task, self._force_task):
             if t and not t.done():
                 t.cancel()
+        if self.store is not None and self._session_id is not None:
+            try:
+                self.store.end_session(self._session_id)
+            except Exception:  # noqa: BLE001 — session close must never crash shutdown
+                pass
+            self._session_id = None
 
     def _set_state(self, state: str) -> None:
         if state != self.state:

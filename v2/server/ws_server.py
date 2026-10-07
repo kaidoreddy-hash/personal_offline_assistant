@@ -19,8 +19,12 @@ import agent_core  # noqa: F401,E402 — offline env guards first
 from agent_core.brain.stub import StubBrain  # noqa: E402
 from agent_core.config import Config, load  # noqa: E402
 from agent_core.debuglog import SessionLog  # noqa: E402
+from agent_core.embedder import Embedder  # noqa: E402
+from agent_core.meeting import diarize_segments, summarize_stub  # noqa: E402
 from agent_core.pipeline import VoicePipeline  # noqa: E402
 from agent_core.stt import WhisperSTT  # noqa: E402
+from agent_core.store import Store  # noqa: E402
+from agent_core.tools.router import ToolRouter  # noqa: E402
 from agent_core.tts import PiperTTS  # noqa: E402
 from agent_core.turn import SmartTurn  # noqa: E402
 
@@ -35,12 +39,15 @@ _cache_lock = threading.Lock()
 
 
 def _get_shared(cfg: Config) -> dict[str, object]:
-    """Process-wide heavy models (stateless): loaded once, shared across sessions."""
+    """Process-wide heavy objects (stateless): loaded once, shared across sessions."""
     with _cache_lock:
         if "stt" not in _cached:
             _cached["stt"] = WhisperSTT(cfg.stt.model_dir, cfg.stt.compute_type, cfg.stt.language)
             _cached["turn"] = SmartTurn(cfg.turn.model)
             _cached["tts"] = PiperTTS(cfg.tts.voice, cfg.tts.gain)
+            _cached["store"] = Store(cfg.store.path)
+            _cached["embedder"] = Embedder(str(ROOT / "models" / "embeddings"))
+            _cached["router"] = ToolRouter(cfg)
         return _cached
 
 
@@ -117,9 +124,10 @@ async def _ws_session(ws, cfg: Config, shared: dict, log: SessionLog, trace) -> 
             cfg, log,
             emit=lambda d: asyncio.create_task(send_json(d)),
             emit_audio=lambda b: asyncio.create_task(send_audio(b)),
-            brain=StubBrain(),
+            brain=StubBrain(router=shared["router"], store=shared["store"], embedder=shared["embedder"]),
             stt=shared["stt"], turn=shared["turn"], tts=shared["tts"],
             meeting_mode=meeting,
+            store=shared["store"],
         )
 
     pipeline = build_pipeline(False)
@@ -132,6 +140,34 @@ async def _ws_session(ws, cfg: Config, shared: dict, log: SessionLog, trace) -> 
             pipeline.check_dormancy()
 
     watcher = asyncio.create_task(dormancy_watch())
+
+    async def finish_meeting(old: VoicePipeline) -> None:
+        """Diarize + summarize the meeting that just ended; update the store."""
+        sid = old._session_id
+        try:
+            buf = old.take_meeting_audio()
+            if not buf:
+                await send_json({"type": "meeting_report", "segments": [], "summary": "No speech captured."})
+                return
+            labels = await loop.run_in_executor(
+                None, diarize_segments, buf, cfg.meeting.diarize.embedding, cfg.meeting.diarize.threshold)
+            store = shared["store"]
+            rows = [u for u in store.recent(limit=500) if u["session_id"] == sid and u["role"] == "speaker"]
+            pairs = list(zip(rows, labels))
+            store.set_speakers({r["id"]: lab for r, lab in pairs})
+            entries = [{**r, "speaker": lab} for r, lab in pairs]
+            summary = summarize_stub(entries, duration_ms=buf[-1][0])
+            if sid is not None:
+                store.set_summary(sid, summary)
+            log.log("meeting_reported", segments=len(pairs), speakers=sorted(set(labels)))
+            await send_json({"type": "meeting_report",
+                             "segments": [{"t_ms": r["t_ms"], "speaker": lab, "text": r["text"]}
+                                          for r, lab in pairs],
+                             "summary": summary})
+        except Exception as exc:  # noqa: BLE001 — report, never crash the session
+            log.log("error", where="diarize", error=repr(exc))
+            await send_json({"type": "error", "message": f"diarization failed: {exc}"})
+
     try:
         while True:
             msg = await ws.receive()
@@ -153,12 +189,15 @@ async def _ws_session(ws, cfg: Config, shared: dict, log: SessionLog, trace) -> 
                     on = bool(ctl.get("value"))
                     if on != state["meeting"]:
                         state["meeting"] = on
-                        pipeline.close()
+                        old = pipeline
+                        old.close()
                         pipeline = build_pipeline(on)
                         log.log("session_start", meeting=on)
                         await send_json({"type": "hello", "log_dir": str(log.dir),
                                          "meeting": on,
                                          "wake_words": [] if on else cfg.wake.names})
+                        if not on:
+                            asyncio.create_task(finish_meeting(old))
                 elif t == "ping":
                     await send_json({"type": "pong"})
     except WebSocketDisconnect:

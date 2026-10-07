@@ -86,9 +86,16 @@ function queueAudio(pcm16) {
 async function start() {
   els.startBtn.disabled = true;
   els.startBtn.textContent = 'loading models…';
-  mediaStream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (err) {
+    els.startBtn.textContent = 'microphone blocked — allow it, then reload';
+    els.start.querySelector('.fine').textContent =
+      'Error: ' + (err && err.name ? err.name : 'mic unavailable');
+    return;
+  }
   ctx = new AudioContext({ sampleRate: 16000 });
   await ctx.audioWorklet.addModule('/mic-worklet.js');
   workletNode = new AudioWorkletNode(ctx, 'mic-capture');
@@ -114,11 +121,26 @@ async function start() {
       case 'error': addLine('sys', `error: ${m.message}`, 'sys'); break;
       case 'latency': els.latency.textContent = `${m.eot_to_first_audio_ms} ms to voice`; break;
       case 'meeting_segment': {
-        const t = new Date(m.t_ms).toISOString().substring(14, 19);
         const div = document.createElement('div');
         div.className = 'mseg';
+        div.dataset.tms = m.t_ms;
         div.textContent = `+${Math.floor(m.t_ms / 60000)}:${String(Math.floor(m.t_ms / 1000) % 60).padStart(2, '0')}  ${m.text}`;
         els.meetingList.appendChild(div);
+        els.meetingList.scrollTop = els.meetingList.scrollHeight;
+        break;
+      }
+      case 'meeting_report': {
+        els.meetingList.innerHTML = '';
+        for (const s of m.segments) {
+          const div = document.createElement('div');
+          div.className = 'mseg';
+          div.innerHTML = `<b>${s.speaker}</b> +${Math.floor(s.t_ms / 60000)}:${String(Math.floor(s.t_ms / 1000) % 60).padStart(2, '0')}  ${s.text}`;
+          els.meetingList.appendChild(div);
+        }
+        const sum = document.createElement('div');
+        sum.className = 'msummary';
+        sum.textContent = m.summary;
+        els.meetingList.appendChild(sum);
         els.meetingList.scrollTop = els.meetingList.scrollHeight;
         break;
       }
