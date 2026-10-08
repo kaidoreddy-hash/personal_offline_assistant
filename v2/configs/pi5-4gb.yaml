@@ -1,11 +1,11 @@
 # Raspberry Pi 5 4GB profile. Schema must match desktop.yaml exactly — tests/test_config_drift.py
 server: { host: 0.0.0.0, port: 8000 }
 audio: { sample_rate: 16000, frame_ms: 32 }
-vad: { threshold: 0.5, min_silence_ms: 300, speech_pad_ms: 30, min_speech_ms: 250 }
+vad: { threshold: 0.5, min_silence_ms: 500, speech_pad_ms: 30, min_speech_ms: 250, barge_sustain_ms: 500 }
 turn:
   model: models/turn/smart-turn-v3.2-cpu.onnx
-  threshold: 0.5
-  force_after_ms: 2000
+  threshold: 0.65           # wait longer before calling a pause "done" (matches desktop)
+  force_after_ms: 1500
 wake:
   dir: models/wakeword
   names: [hey_jarvis]

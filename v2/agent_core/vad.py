@@ -76,8 +76,10 @@ class UtteranceTracker:
         self.threshold = threshold
         self.frame = SileroVAD.FRAME_SAMPLES
         self.frame_ms = self.frame * 1000 // sample_rate
-        self.min_silence_frames = max(1, min_silence_ms // self.frame_ms)
-        self.speech_pad_frames = speech_pad_ms // self.frame_ms
+        # Ceil, never floor: flooring lost the 30ms pad entirely (30//32 == 0
+        # frames) and shaved up to frame_ms off the silence window.
+        self.min_silence_frames = max(1, -(-min_silence_ms // self.frame_ms))
+        self.speech_pad_frames = max(1, -(-speech_pad_ms // self.frame_ms))
         self.min_speech_samples = min_speech_ms * sample_rate // 1000
         self.reset()
 

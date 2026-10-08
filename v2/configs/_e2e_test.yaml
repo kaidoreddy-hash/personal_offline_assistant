@@ -9,7 +9,7 @@ turn:
 wake:
   dir: models/wakeword
   names: [hey_jarvis]        # placeholder until a trained hey_tobi model drops in this dir
-  threshold: 0.35            # real-voice scores logged at 0.56-0.81; 0.5 was too tight
+  threshold: 0.01           # E2E: any audio wakes
   refractory_ms: 2000
 stt:
   model_dir: models/stt-base

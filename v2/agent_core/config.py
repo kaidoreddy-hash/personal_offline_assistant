@@ -45,6 +45,7 @@ class VadCfg:
     min_silence_ms: int
     speech_pad_ms: int
     min_speech_ms: int
+    barge_sustain_ms: int      # continuous speech needed to interrupt a playing reply
 
 
 @dataclass(frozen=True)

@@ -12,3 +12,6 @@ data/
 
 # secrets
 .env
+
+# zcode session workspace
+.zcode/

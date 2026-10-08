@@ -28,6 +28,38 @@ MANIFEST: list[tuple[str, str, str]] = [
     # Feature frontends every openWakeWord classifier needs.
     (f"{_GH_OW}/melspectrogram.onnx", "models/wakeword/melspectrogram.onnx", "file"),
     (f"{_GH_OW}/embedding_model.onnx", "models/wakeword/embedding_model.onnx", "file"),
+    # STT upgrade: base.en (better accuracy than tiny.en, still CPU-friendly).
+    (
+        "https://huggingface.co/Systran/faster-whisper-base.en/resolve/main/model.bin",
+        "models/stt-base/model.bin",
+        "file",
+    ),
+    (
+        "https://huggingface.co/Systran/faster-whisper-base.en/resolve/main/config.json",
+        "models/stt-base/config.json",
+        "file",
+    ),
+    (
+        "https://huggingface.co/Systran/faster-whisper-base.en/resolve/main/tokenizer.json",
+        "models/stt-base/tokenizer.json",
+        "file",
+    ),
+    (
+        "https://huggingface.co/Systran/faster-whisper-base.en/resolve/main/vocabulary.txt",
+        "models/stt-base/vocabulary.txt",
+        "file",
+    ),
+    # TTS upgrade: lessac-medium (much better than low, still faster than realtime).
+    (
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+        "models/tts/en_US-lessac-medium.onnx",
+        "file",
+    ),
+    (
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
+        "models/tts/en_US-lessac-medium.onnx.json",
+        "file",
+    ),
     (
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
         "models/diarize/segmentation.onnx",
@@ -68,10 +100,11 @@ MANIFEST: list[tuple[str, str, str]] = [
 
 # Not downloadable here (already on disk / separate channels) — verified at the end.
 MUST_EXIST = [
-    "models/stt-tiny/model.bin",            # faster-whisper tiny.en (CTranslate2)
-    "models/stt-tiny/tokenizer.json",
-    "models/tts/en_US-lessac-low.onnx",     # Piper voice
-    "models/tts/en_US-lessac-low.onnx.json",
+    "models/stt-base/model.bin",            # faster-whisper base.en (CTranslate2)
+    "models/stt-base/tokenizer.json",
+    "models/stt-tiny/model.bin",            # fallback STT (Pi profile)
+    "models/tts/en_US-lessac-medium.onnx",  # Piper voice (desktop profile)
+    "models/tts/en_US-lessac-low.onnx",     # fallback voice (Pi profile)
     "models/silero_vad_v5.onnx",            # Silero VAD v5
 ]
 

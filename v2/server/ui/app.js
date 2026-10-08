@@ -28,10 +28,12 @@ let ws = null;
 let ctx = null, workletNode = null, mediaStream = null;
 let sources = [], nextStartTime = 0;
 
-// Echo gate: while TTS is playing we stop sending mic frames, so open speakers
-// cannot feed the agent its own voice. With a headset (or the Pi's AEC) flip
-// suppressMic to false to get true voice barge-in.
-let suppressMic = true;
+// The mic stays OPEN while TTS plays so the user can interrupt: the browser's
+// AEC (echoCancellation: true below) removes our own voice, and the server's
+// barge-sustain guard ignores short speaker-echo blips. Flip suppressMic to
+// true only to debug raw echo problems — it drops every frame during playback,
+// which makes barge-in impossible.
+let suppressMic = false;
 let playing = false, playEndTimer = null;
 
 function setPlaying(on) {
@@ -115,7 +117,8 @@ function queueAudio(pcm16) {
   src.onended = () => {
     sources = sources.filter((s) => s !== src);
     if (!sources.length) {
-      // playback finished + 300ms room tail, then the mic opens again
+      // playback finished; 300ms tail before we report playback-end to the
+      // server (it keeps its playback-end echo window open that long)
       if (playEndTimer) clearTimeout(playEndTimer);
       playEndTimer = setTimeout(() => {
         setPlaying(false);
@@ -147,7 +150,7 @@ async function start() {
   await ctx.audioWorklet.addModule('/mic-worklet.js');
   workletNode = new AudioWorkletNode(ctx, 'mic-capture');
   workletNode.port.onmessage = (e) => {
-    if (suppressMic && playing) return; // echo gate: never send while TTS plays
+    if (suppressMic && playing) return; // inert fallback echo gate (off by default)
     if (ws && ws.readyState === 1) ws.send(e.data);
   };
   ctx.createMediaStreamSource(mediaStream).connect(workletNode); // not to destination: no feedback loop

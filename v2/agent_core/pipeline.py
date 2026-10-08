@@ -96,6 +96,8 @@ class VoicePipeline:
         self._force_task: asyncio.Task | None = None
         self._barge = asyncio.Event()
         self._barge_armed = False          # arms once the mic is quiet during playback
+        self._barge_speech_ms = 0.0        # continuous speech seen during playback
+        self._barge_blocked_logged = False # one barge_blocked debug event per playback segment
         self._client_playing = False       # client is playing TTS (echo gate)
         self._client_playback_end = 0.0    # playback end + tail margin (mono time)
         self._utt_start_mono: float | None = None
@@ -142,16 +144,28 @@ class VoicePipeline:
         if self.tracker.in_utterance:
             self._last_voice = time.monotonic()
 
-        if self.state == SPEAKING:
+        if self.state == SPEAKING or self._client_playing:
+            # Barge window covers the whole time the user hears our voice:
+            # emission (SPEAKING) AND client playback afterwards — a short
+            # reply finishes emitting long before the browser finishes playing
+            # it. Needs CONTINUOUS speech (short blips are speaker echo); it is
+            # disarmed during the wake grace window AND until the mic has been
+            # quiet once: the echo tail of the previous reply must not kill the
+            # fresh reply.
             if self.tracker.in_utterance:
-                # Barge-in is disarmed during the wake grace window AND until the
-                # mic has been quiet once: the echo tail of the previous reply
-                # must not kill the fresh reply.
-                if self._barge_armed and time.monotonic() >= self._wake_grace_until:
+                self._barge_speech_ms += self.tracker.frame_ms
+                if (self._barge_armed and time.monotonic() >= self._wake_grace_until
+                        and not self._barge.is_set()
+                        and self._barge_speech_ms >= self.cfg.vad.barge_sustain_ms):
                     self._barge_in()
             else:
+                if self._barge_speech_ms and not self._barge_blocked_logged:
+                    self.log.log("barge_blocked", speech_ms=round(self._barge_speech_ms))
+                    self._barge_blocked_logged = True
+                self._barge_speech_ms = 0.0
                 self._barge_armed = True
-            return
+            if self.state == SPEAKING:
+                return
 
         if self.tracker.in_utterance:
             if self._utt_start_mono is None:
@@ -176,6 +190,11 @@ class VoicePipeline:
         if self.meeting_mode:
             self._turn_task = self._loop.create_task(self._meeting_segment(utterance))
             return
+        if self._client_playing and not self._barge.is_set():
+            # A user turn landing while our reply still plays (e.g. speech
+            # shorter than the sustain window, like a quick "stop") stops the
+            # playback too — Gemini-style: user speech always wins the floor.
+            self._barge_in()
         if self._turn_task and not self._turn_task.done():
             # Previous turn is still deciding/playing; queue as a continuation.
             self._pending.append(utterance)
@@ -292,6 +311,8 @@ class VoicePipeline:
         """
         self._barge.clear()
         self._barge_armed = not self.tracker.in_utterance
+        self._barge_speech_ms = 0.0        # fresh playback segment: reset sustain + blocked-log
+        self._barge_blocked_logged = False
         first_audio_ms: float | None = None
         reply_text = ""
         self._set_state(SPEAKING)
@@ -347,11 +368,17 @@ class VoicePipeline:
     # -------------------------------------------------------------- barge-in
 
     def _barge_in(self) -> None:
-        self.log.log("barge_in")
+        self.log.log("barge_in", speech_ms=round(self._barge_speech_ms))
         self.emit({"type": "bargein"})
         self._barge.set()
         if self._force_task and not self._force_task.done():
             self._force_task.cancel()
+        if self._turn_task and not self._turn_task.done():
+            # Cancel the whole turn: CancelledError unwinds _play_sentences and
+            # the brain/TTS generator chain, aborting the in-flight LLM stream.
+            self._turn_task.cancel()
+        self._turn_task = None
+        self._pending = []  # a held/continuation turn must not resurrect after the barge
         self._set_state(LISTENING)
 
     # -------------------------------------------------------------- partials
