@@ -289,3 +289,30 @@ def test_interrupting_utterance_runs_as_fresh_turn(tmp_path, monkeypatch):
             await settle()
 
     asyncio.run(body())
+
+
+def test_user_turn_during_playback_stops_playback(tmp_path, monkeypatch):
+    """(e) A completed user turn while the client still plays (a quick "stop"
+    shorter than the sustain window) must stop the playback AND run as a
+    fresh turn. Live-E2E gap: the server finishes emitting long before the
+    browser finishes playing, so state is LISTENING while audio is audible."""
+
+    async def body():
+        h = await make_pipeline(monkeypatch, tmp_path)
+        try:
+            h.p._on_utterance_end(np.zeros(16000, np.float32))
+            await wait_until(lambda: h.p.state == "listening", "reply fully emitted")
+            h.p.set_client_playback(True)          # browser still playing
+
+            h.p.tracker.utt = np.zeros(8000, np.float32)
+            h.p.feed(FRAME)                        # quick utterance ends mid-playback
+
+            assert any(e["type"] == "bargein" for e in h.emitted), \
+                "user turn during playback must stop the playback"
+            await wait_until(lambda: len(h.brain.calls) == 2, "fresh turn runs")
+            await wait_until(lambda: h.p.state == "speaking", "fresh reply plays")
+        finally:
+            h.p.close()
+            await settle()
+
+    asyncio.run(body())
