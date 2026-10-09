@@ -148,21 +148,24 @@ class VoicePipeline:
             # Barge window covers the whole time the user hears our voice:
             # emission (SPEAKING) AND client playback afterwards — a short
             # reply finishes emitting long before the browser finishes playing
-            # it. Needs CONTINUOUS speech (short blips are speaker echo); it is
-            # disarmed during the wake grace window AND until the mic has been
-            # quiet once: the echo tail of the previous reply must not kill the
-            # fresh reply.
+            # it. An interrupt needs barge_sustain_ms of CONTINUOUS
+            # high-confidence speech (barge_prob): close clear speech scores
+            # 0.9+, while distant chatter, background noise and AEC leakage
+            # score lower and must not cut the reply. Also disarmed during the
+            # wake grace window AND until the mic has been quiet once: the
+            # echo tail of the previous reply must not kill the fresh reply.
             if self.tracker.in_utterance:
-                self._barge_speech_ms += self.tracker.frame_ms
-                if (self._barge_armed and time.monotonic() >= self._wake_grace_until
-                        and not self._barge.is_set()
-                        and self._barge_speech_ms >= self.cfg.vad.barge_sustain_ms):
-                    self._barge_in()
+                if self.tracker.last_prob >= self.cfg.vad.barge_prob:
+                    self._barge_speech_ms += self.tracker.frame_ms
+                    if (self._barge_armed and time.monotonic() >= self._wake_grace_until
+                            and not self._barge.is_set()
+                            and self._barge_speech_ms >= self.cfg.vad.barge_sustain_ms):
+                        self._barge_in()
+                else:
+                    # low-confidence frame: the confident run is broken
+                    self._flush_barge_run()
             else:
-                if self._barge_speech_ms and not self._barge_blocked_logged:
-                    self.log.log("barge_blocked", speech_ms=round(self._barge_speech_ms))
-                    self._barge_blocked_logged = True
-                self._barge_speech_ms = 0.0
+                self._flush_barge_run()
                 self._barge_armed = True
             if self.state == SPEAKING:
                 return
@@ -366,6 +369,14 @@ class VoicePipeline:
         return gen()
 
     # -------------------------------------------------------------- barge-in
+
+    def _flush_barge_run(self) -> None:
+        """A confident-speech run ended (silence or low-confidence frame):
+        log it once per playback segment if it never reached the sustain."""
+        if self._barge_speech_ms and not self._barge_blocked_logged:
+            self.log.log("barge_blocked", speech_ms=round(self._barge_speech_ms))
+            self._barge_blocked_logged = True
+        self._barge_speech_ms = 0.0
 
     def _barge_in(self) -> None:
         self.log.log("barge_in", speech_ms=round(self._barge_speech_ms))

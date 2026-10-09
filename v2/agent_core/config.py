@@ -46,6 +46,7 @@ class VadCfg:
     speech_pad_ms: int
     min_speech_ms: int
     barge_sustain_ms: int      # continuous speech needed to interrupt a playing reply
+    barge_prob: float          # per-frame VAD confidence needed to count toward barge
 
 
 @dataclass(frozen=True)

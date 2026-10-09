@@ -88,6 +88,7 @@ class UtteranceTracker:
         self.triggered = False
         self.temp_end = 0            # frame index where the current silence dip started
         self.current = 0             # frame index counter
+        self.last_prob = 0.0         # speech probability of the most recent frame
         self.buffer: list[np.ndarray] = []
         self.prefix: list[np.ndarray] = []
         self.pre_speech: list[np.ndarray] = []
@@ -103,6 +104,7 @@ class UtteranceTracker:
             raise ValueError(f"VAD needs exactly {self.frame} samples, got {x.size}")
         self.current += 1
         p = self.vad.prob(x)
+        self.last_prob = p
 
         if not self.triggered:
             if p >= self.threshold:

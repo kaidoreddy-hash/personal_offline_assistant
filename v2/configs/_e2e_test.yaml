@@ -1,7 +1,7 @@
 # Desktop (Windows PC) profile. Schema must match pi5-4gb.yaml exactly — tests/test_config_drift.py
 server: { host: 127.0.0.1, port: 8000 }
 audio: { sample_rate: 16000, frame_ms: 32 }
-vad: { threshold: 0.5, min_silence_ms: 500, speech_pad_ms: 30, min_speech_ms: 250, barge_sustain_ms: 300 }
+vad: { threshold: 0.5, min_silence_ms: 500, speech_pad_ms: 30, min_speech_ms: 250, barge_sustain_ms: 650, barge_prob: 0.65 }
 turn:
   model: models/turn/smart-turn-v3.2-cpu.onnx
   threshold: 0.65           # logs: 0.5 over-called "complete" on mid-thought pauses

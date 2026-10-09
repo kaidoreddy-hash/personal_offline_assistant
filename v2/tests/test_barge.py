@@ -28,8 +28,9 @@ from agent_core.stt import Transcript
 from agent_core.turn import TurnResult
 from tests.test_vad_turn import ROOT
 
-CFG = load(ROOT / "configs" / "desktop.yaml")  # barge_sustain_ms: 300
+CFG = load(ROOT / "configs" / "desktop.yaml")
 FRAME = np.zeros(512, np.float32)
+SUSTAIN_FRAMES = CFG.vad.barge_sustain_ms // 32 + 2  # comfortably past the gate
 
 
 # --------------------------------------------------------------- minimal fakes
@@ -37,6 +38,7 @@ FRAME = np.zeros(512, np.float32)
 class FakeTracker:
     """Stands in for UtteranceTracker: in_utterance is test-controlled."""
     frame_ms = 32  # 512 samples @ 16 kHz, same as the real tracker
+    last_prob = 0.95  # confident close speech by default
 
     def __init__(self) -> None:
         self.speaking = False
@@ -194,7 +196,7 @@ def test_sustained_speech_barges_and_cancels_turn(tmp_path, monkeypatch):
             await wait_until(lambda: len(h.audio) >= 1, "first sentence audible")
 
             h.p.tracker.speaking = True
-            for _ in range(12):  # 12 x 32ms = 384ms >= 300ms sustain
+            for _ in range(SUSTAIN_FRAMES):  # >= barge_sustain_ms of confident speech
                 h.p.feed(FRAME)
             h.p.tracker.speaking = False
             for _ in range(2):
@@ -230,7 +232,7 @@ def test_barge_mid_reply_stops_output_and_history(tmp_path, monkeypatch):
 
             n_audio, n_chunks = len(h.audio), sum(e["type"] == "reply_chunk" for e in h.emitted)
             h.p.tracker.speaking = True
-            for _ in range(12):
+            for _ in range(SUSTAIN_FRAMES):
                 h.p.feed(FRAME)
             h.p.tracker.speaking = False
             for _ in range(2):
@@ -265,7 +267,7 @@ def test_interrupting_utterance_runs_as_fresh_turn(tmp_path, monkeypatch):
             await wait_until(lambda: len(h.audio) >= 1, "first sentence audible")
 
             h.p.tracker.speaking = True
-            for _ in range(12):  # sustained speech -> barge
+            for _ in range(SUSTAIN_FRAMES):  # sustained speech -> barge
                 h.p.feed(FRAME)
             h.p.tracker.speaking = False
             for _ in range(2):
@@ -311,6 +313,36 @@ def test_user_turn_during_playback_stops_playback(tmp_path, monkeypatch):
                 "user turn during playback must stop the playback"
             await wait_until(lambda: len(h.brain.calls) == 2, "fresh turn runs")
             await wait_until(lambda: h.p.state == "speaking", "fresh reply plays")
+        finally:
+            h.p.close()
+            await settle()
+
+    asyncio.run(body())
+
+
+def test_low_confidence_speech_does_not_barge(tmp_path, monkeypatch):
+    """(f) Sustained but low-confidence speech (background chatter, distant
+    voices, AEC leakage) must NOT interrupt the reply — only confident
+    close speech counts toward the sustain window."""
+
+    async def body():
+        h = await make_pipeline(monkeypatch, tmp_path)
+        try:
+            h.p._on_utterance_end(np.zeros(16000, np.float32))
+            await wait_until(lambda: h.p.state == "speaking", "reply playing")
+
+            h.p.tracker.speaking = True
+            h.p.tracker.last_prob = 0.45  # above VAD trigger, below barge_prob
+            for _ in range(SUSTAIN_FRAMES * 2):
+                h.p.feed(FRAME)
+            h.p.tracker.speaking = False
+            for _ in range(3):
+                h.p.feed(FRAME)
+
+            assert h.p.state == "speaking", "noise/distant speech must not barge"
+            assert not any(e["type"] == "bargein" for e in h.emitted)
+            blocked = [e for e in log_events(h.p) if e["event"] == "barge_blocked"]
+            assert blocked and blocked[0]["speech_ms"] == 0 or not blocked
         finally:
             h.p.close()
             await settle()
